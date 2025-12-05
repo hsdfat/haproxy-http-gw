@@ -32,7 +32,7 @@ The workflow only runs when these paths are modified:
 - ✅ Build all Docker images in parallel
 
 #### 2. Service Startup
-- ✅ Start all services via docker-compose
+- ✅ Start all services via docker compose
 - ✅ Wait 30 seconds for initialization
 - ✅ Health check gateway (HTTP endpoint)
 - ✅ Health check backend API
@@ -247,10 +247,10 @@ make setup
 make test
 
 # Or manually:
-docker-compose up -d
-docker-compose run --rm test-client /test-client -verbose
-docker-compose run --rm test-client /perf-client -c=10 -n=1000
-docker-compose down -v
+docker compose up -d
+docker compose run --rm test-client /test-client -verbose
+docker compose run --rm test-client /perf-client -c=10 -n=1000
+docker compose down -v
 ```
 
 ### Customization
@@ -272,7 +272,7 @@ Add new steps:
 - name: Run custom test
   run: |
     cd test
-    docker-compose run --rm test-client /perf-client -c=100 -d=60s
+    docker compose run --rm test-client /perf-client -c=100 -d=60s
 ```
 
 #### Modify Concurrency Levels
@@ -281,7 +281,7 @@ Change test parameters:
 
 ```yaml
 # Change from 50 to 100 workers
-docker-compose run --rm test-client /perf-client -c=100 -n=10000
+docker compose run --rm test-client /perf-client -c=100 -n=10000
 ```
 
 ### Monitoring and Metrics

@@ -245,7 +245,7 @@ make test-functional
 make test-perf
 
 # Specific performance test
-docker-compose run --rm test-client /perf-client -c=50 -n=5000
+docker compose run --rm test-client /perf-client -c=50 -n=5000
 ```
 
 ## Debugging Failed Tests
@@ -272,10 +272,10 @@ make test
 
 ```bash
 # Gateway logs
-docker-compose logs gateway
+docker compose logs gateway
 
 # Backend API logs
-docker-compose logs backend-api
+docker compose logs backend-api
 
 # All logs
 make logs
@@ -285,7 +285,7 @@ make logs
 
 ```bash
 # Service status
-docker-compose ps
+docker compose ps
 
 # Health checks
 curl http://localhost:8080/health

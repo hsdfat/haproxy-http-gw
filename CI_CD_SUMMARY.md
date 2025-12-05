@@ -54,7 +54,7 @@ A comprehensive automated test workflow with:
    └─ Build Docker images
 
 2. Service Startup
-   ├─ Start docker-compose
+   ├─ Start docker compose
    ├─ Wait for services (30s)
    ├─ Health check gateway
    └─ Health check backend API
@@ -249,8 +249,8 @@ make test
 gh run view <run-id> --log
 
 # Or locally
-docker-compose logs gateway
-docker-compose logs backend-api
+docker compose logs gateway
+docker compose logs backend-api
 ```
 
 ## 🔐 Branch Protection
@@ -294,7 +294,7 @@ if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then  # Change 99.0
   id: custom-test
   run: |
     cd test
-    docker-compose run --rm test-client /perf-client -c=100 -d=60s
+    docker compose run --rm test-client /perf-client -c=100 -d=60s
 ```
 
 ### Modify Concurrency
