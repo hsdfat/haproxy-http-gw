@@ -1,0 +1,10 @@
+# Generated certificates
+certs/*.crt
+certs/*.key
+certs/*.pem
+certs/*.csr
+certs/*.srl
+certs/*.ext
+
+# Keep directory
+!certs/.gitkeep

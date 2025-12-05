@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  # HAProxy HTTP Gateway
+  gateway:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.gateway
+    container_name: http-gateway
+    ports:
+      - "8080:8080"   # HTTP
+      - "8443:8443"   # HTTPS
+      - "9090:9090"   # Stats/Admin
+    volumes:
+      - ./certs:/etc/haproxy/certs:ro
+      - haproxy-runtime:/var/run
+      - haproxy-config:/tmp/haproxy-gateway
+    environment:
+      - LOG_LEVEL=debug
+      - BACKEND_API_URL=http://backend-api:8000
+    networks:
+      - gateway-net
+    depends_on:
+      - backend-api
+      - backend-server-1
+      - backend-server-2
+      - backend-server-3
+    restart: unless-stopped
+
+  # Backend API Provider (REST API for dynamic backend discovery)
+  backend-api:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend-api
+    container_name: backend-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+    networks:
+      - gateway-net
+    restart: unless-stopped
+
+  # Mock Backend Servers (HTTP/2 enabled)
+  backend-server-1:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend
+    container_name: backend-server-1
+    environment:
+      - SERVER_NAME=backend-server-1
+      - SERVER_PORT=9000
+      - ENABLE_HTTP2=true
+    networks:
+      - gateway-net
+    restart: unless-stopped
+
+  backend-server-2:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend
+    container_name: backend-server-2
+    environment:
+      - SERVER_NAME=backend-server-2
+      - SERVER_PORT=9000
+      - ENABLE_HTTP2=true
+    networks:
+      - gateway-net
+    restart: unless-stopped
+
+  backend-server-3:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend
+    container_name: backend-server-3
+    environment:
+      - SERVER_NAME=backend-server-3
+      - SERVER_PORT=9000
+      - ENABLE_HTTP2=true
+    networks:
+      - gateway-net
+    restart: unless-stopped
+
+  # Web Backend Servers
+  web-server-1:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend
+    container_name: web-server-1
+    environment:
+      - SERVER_NAME=web-server-1
+      - SERVER_PORT=9000
+      - ENABLE_HTTP2=true
+    networks:
+      - gateway-net
+    restart: unless-stopped
+
+  web-server-2:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend
+    container_name: web-server-2
+    environment:
+      - SERVER_NAME=web-server-2
+      - SERVER_PORT=9000
+      - ENABLE_HTTP2=true
+    networks:
+      - gateway-net
+    restart: unless-stopped
+
+  # Test Client (for running tests)
+  test-client:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.test-client
+    container_name: test-client
+    environment:
+      - GATEWAY_URL=http://gateway:8080
+      - GATEWAY_HTTPS_URL=https://gateway:8443
+      - BACKEND_API_URL=http://backend-api:8000
+    networks:
+      - gateway-net
+    depends_on:
+      - gateway
+    profiles:
+      - testing
+
+volumes:
+  haproxy-runtime:
+  haproxy-config:
+
+networks:
+  gateway-net:
+    driver: bridge

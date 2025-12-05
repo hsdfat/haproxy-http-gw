@@ -1,0 +1,18 @@
+FROM golang:1.24-alpine
+
+RUN apk add --no-cache curl bash jq apache2-utils
+
+WORKDIR /app
+
+COPY test/client/go.mod test/client/go.sum ./
+RUN go mod download || true
+
+COPY test/client/ ./
+
+RUN go build -o /test-client ./cmd/test-client
+RUN go build -o /perf-client ./cmd/perf-client
+
+COPY test/scripts/run-tests.sh /usr/local/bin/run-tests.sh
+RUN chmod +x /usr/local/bin/run-tests.sh
+
+CMD ["/bin/sh"]

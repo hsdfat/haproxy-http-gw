@@ -1,0 +1,429 @@
+name: HTTP Gateway Tests
+
+on:
+  push:
+    branches: [ master, main, develop ]
+    paths:
+      - 'pkg/gateway/**'
+      - 'cmd/http-gateway/**'
+      - 'test/**'
+      - '.github/workflows/gateway-tests.yml'
+  pull_request:
+    branches: [ master, main, develop ]
+    paths:
+      - 'pkg/gateway/**'
+      - 'cmd/http-gateway/**'
+      - 'test/**'
+      - '.github/workflows/gateway-tests.yml'
+  workflow_dispatch:
+
+env:
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  test:
+    name: Gateway Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Generate SSL certificates
+        run: |
+          cd test
+          chmod +x scripts/generate-certs.sh
+          ./scripts/generate-certs.sh
+
+      - name: Build test environment
+        run: |
+          cd test
+          docker-compose build --parallel
+        env:
+          DOCKER_BUILDKIT: 1
+
+      - name: Start test environment
+        run: |
+          cd test
+          docker-compose up -d
+          echo "Waiting for services to be ready..."
+          sleep 30
+
+      - name: Check service health
+        run: |
+          cd test
+          echo "Checking service status..."
+          docker-compose ps
+
+          echo ""
+          echo "Checking gateway health..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+              echo "✓ Gateway is healthy"
+              break
+            fi
+            echo "Attempt $i/30: Gateway not ready yet..."
+            sleep 2
+          done
+
+          if ! curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+            echo "✗ Gateway failed to become healthy"
+            docker-compose logs gateway
+            exit 1
+          fi
+
+          echo ""
+          echo "Checking backend API health..."
+          if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+            echo "✓ Backend API is healthy"
+          else
+            echo "✗ Backend API is not healthy"
+            docker-compose logs backend-api
+            exit 1
+          fi
+
+      - name: View service logs (pre-test)
+        if: always()
+        run: |
+          cd test
+          echo "=== Gateway Logs ==="
+          docker-compose logs --tail=50 gateway || true
+          echo ""
+          echo "=== Backend API Logs ==="
+          docker-compose logs --tail=50 backend-api || true
+
+      - name: Run functional tests
+        id: functional-tests
+        run: |
+          cd test
+          echo "Running functional tests..."
+          docker-compose run --rm test-client /test-client \
+            -gateway=http://gateway:8080 \
+            -gateway-https=https://gateway:8443 \
+            -verbose > functional-results.txt 2>&1
+
+          cat functional-results.txt
+
+          # Check if all tests passed
+          if grep -q "Failed: 0" functional-results.txt; then
+            echo "✓ All functional tests passed"
+            echo "functional_tests_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "✗ Some functional tests failed"
+            echo "functional_tests_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Run performance tests - Low concurrency
+        id: perf-test-low
+        run: |
+          cd test
+          echo "Running low concurrency performance test..."
+          docker-compose run --rm test-client /perf-client \
+            -url=http://gateway:8080 \
+            -c=10 \
+            -n=1000 > perf-low-results.txt 2>&1
+
+          cat perf-low-results.txt
+
+          # Extract and validate metrics
+          if grep -q "Successful:" perf-low-results.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-low-results.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-low-results.txt | awk '{print $2}')
+
+            echo "Success rate: ${SUCCESS_RATE}%"
+            echo "Requests/sec: ${RPS}"
+
+            # Validate success rate >= 99%
+            if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
+              echo "✓ Performance test passed (success rate: ${SUCCESS_RATE}%)"
+              echo "perf_low_passed=true" >> $GITHUB_OUTPUT
+              echo "perf_low_rps=${RPS}" >> $GITHUB_OUTPUT
+            else
+              echo "✗ Performance test failed (success rate: ${SUCCESS_RATE}% < 99%)"
+              echo "perf_low_passed=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          else
+            echo "✗ Failed to parse performance results"
+            exit 1
+          fi
+
+      - name: Run performance tests - Medium concurrency
+        id: perf-test-medium
+        run: |
+          cd test
+          echo "Running medium concurrency performance test..."
+          docker-compose run --rm test-client /perf-client \
+            -url=http://gateway:8080 \
+            -c=50 \
+            -n=5000 > perf-medium-results.txt 2>&1
+
+          cat perf-medium-results.txt
+
+          # Extract and validate metrics
+          if grep -q "Successful:" perf-medium-results.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-medium-results.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-medium-results.txt | awk '{print $2}')
+
+            echo "Success rate: ${SUCCESS_RATE}%"
+            echo "Requests/sec: ${RPS}"
+
+            # Validate success rate >= 98%
+            if (( $(echo "$SUCCESS_RATE >= 98.0" | bc -l) )); then
+              echo "✓ Performance test passed (success rate: ${SUCCESS_RATE}%)"
+              echo "perf_medium_passed=true" >> $GITHUB_OUTPUT
+              echo "perf_medium_rps=${RPS}" >> $GITHUB_OUTPUT
+            else
+              echo "✗ Performance test failed (success rate: ${SUCCESS_RATE}% < 98%)"
+              echo "perf_medium_passed=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          else
+            echo "✗ Failed to parse performance results"
+            exit 1
+          fi
+
+      - name: Run HTTP/2 performance test
+        id: perf-test-http2
+        run: |
+          cd test
+          echo "Running HTTP/2 performance test..."
+          docker-compose run --rm test-client /perf-client \
+            -url=http://gateway:8080 \
+            -http2 \
+            -c=50 \
+            -n=5000 > perf-http2-results.txt 2>&1
+
+          cat perf-http2-results.txt
+
+          # Extract and validate metrics
+          if grep -q "Successful:" perf-http2-results.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-http2-results.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-http2-results.txt | awk '{print $2}')
+
+            echo "Success rate: ${SUCCESS_RATE}%"
+            echo "Requests/sec: ${RPS}"
+
+            # Validate success rate >= 98%
+            if (( $(echo "$SUCCESS_RATE >= 98.0" | bc -l) )); then
+              echo "✓ HTTP/2 performance test passed (success rate: ${SUCCESS_RATE}%)"
+              echo "perf_http2_passed=true" >> $GITHUB_OUTPUT
+              echo "perf_http2_rps=${RPS}" >> $GITHUB_OUTPUT
+            else
+              echo "✗ HTTP/2 performance test failed (success rate: ${SUCCESS_RATE}% < 98%)"
+              echo "perf_http2_passed=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          else
+            echo "✗ Failed to parse performance results"
+            exit 1
+          fi
+
+      - name: Test dynamic backend updates
+        id: dynamic-backend-test
+        run: |
+          cd test
+          echo "Testing dynamic backend updates..."
+
+          # Add a new backend
+          echo "Adding new backend..."
+          curl -X POST http://localhost:8000/backends \
+            -H "Content-Type: application/json" \
+            -d '{
+              "name": "dynamic-test-backend",
+              "servers": [
+                {"name": "backend-server-3", "ip": "backend-server-3", "port": 9000}
+              ]
+            }'
+
+          # Wait for gateway to pick up changes
+          sleep 5
+
+          # Verify backend was added
+          echo "Verifying backend was added..."
+          if curl -s http://localhost:8000/backends | grep -q "dynamic-test-backend"; then
+            echo "✓ Dynamic backend update successful"
+            echo "dynamic_backend_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "✗ Dynamic backend update failed"
+            echo "dynamic_backend_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test/functional-results.txt
+            test/perf-low-results.txt
+            test/perf-medium-results.txt
+            test/perf-http2-results.txt
+          retention-days: 30
+
+      - name: View service logs (post-test)
+        if: always()
+        run: |
+          cd test
+          echo "=== Gateway Logs ==="
+          docker-compose logs gateway || true
+          echo ""
+          echo "=== Backend API Logs ==="
+          docker-compose logs backend-api || true
+          echo ""
+          echo "=== Backend Server Logs ==="
+          docker-compose logs backend-server-1 backend-server-2 backend-server-3 || true
+
+      - name: Collect Docker stats
+        if: always()
+        run: |
+          cd test
+          echo "=== Docker Container Stats ==="
+          docker stats --no-stream || true
+
+      - name: Stop test environment
+        if: always()
+        run: |
+          cd test
+          docker-compose down -v
+
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "# HTTP Gateway Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Category | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+
+          # Functional tests
+          if [ "${{ steps.functional-tests.outputs.functional_tests_passed }}" == "true" ]; then
+            echo "| Functional Tests | ✅ PASS | All tests passed |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Functional Tests | ❌ FAIL | Some tests failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Performance test - low
+          if [ "${{ steps.perf-test-low.outputs.perf_low_passed }}" == "true" ]; then
+            echo "| Performance (Low) | ✅ PASS | RPS: ${{ steps.perf-test-low.outputs.perf_low_rps }} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Performance (Low) | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Performance test - medium
+          if [ "${{ steps.perf-test-medium.outputs.perf_medium_passed }}" == "true" ]; then
+            echo "| Performance (Medium) | ✅ PASS | RPS: ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Performance (Medium) | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Performance test - HTTP/2
+          if [ "${{ steps.perf-test-http2.outputs.perf_http2_passed }}" == "true" ]; then
+            echo "| HTTP/2 Performance | ✅ PASS | RPS: ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| HTTP/2 Performance | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Dynamic backend test
+          if [ "${{ steps.dynamic-backend-test.outputs.dynamic_backend_passed }}" == "true" ]; then
+            echo "| Dynamic Backend | ✅ PASS | Backend updates working |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Dynamic Backend | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Performance Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Configuration | Requests/sec |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------------|--------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 10 workers, HTTP/1.1 | ${{ steps.perf-test-low.outputs.perf_low_rps }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 50 workers, HTTP/1.1 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 50 workers, HTTP/2 | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const functionalPassed = '${{ steps.functional-tests.outputs.functional_tests_passed }}' === 'true';
+            const perfLowPassed = '${{ steps.perf-test-low.outputs.perf_low_passed }}' === 'true';
+            const perfMediumPassed = '${{ steps.perf-test-medium.outputs.perf_medium_passed }}' === 'true';
+            const perfHttp2Passed = '${{ steps.perf-test-http2.outputs.perf_http2_passed }}' === 'true';
+            const dynamicPassed = '${{ steps.dynamic-backend-test.outputs.dynamic_backend_passed }}' === 'true';
+
+            const allPassed = functionalPassed && perfLowPassed && perfMediumPassed && perfHttp2Passed && dynamicPassed;
+
+            const emoji = allPassed ? '✅' : '❌';
+            const status = allPassed ? 'All tests passed!' : 'Some tests failed';
+
+            const body = `## ${emoji} HTTP Gateway Test Results
+
+            **Status:** ${status}
+
+            ### Test Results
+
+            | Test | Result |
+            |------|--------|
+            | Functional Tests | ${functionalPassed ? '✅' : '❌'} |
+            | Performance (10 workers) | ${perfLowPassed ? '✅' : '❌'} |
+            | Performance (50 workers) | ${perfMediumPassed ? '✅' : '❌'} |
+            | HTTP/2 Performance | ${perfHttp2Passed ? '✅' : '❌'} |
+            | Dynamic Backend Updates | ${dynamicPassed ? '✅' : '❌'} |
+
+            ### Performance Metrics
+
+            | Configuration | Requests/sec |
+            |--------------|--------------|
+            | 10 workers, HTTP/1.1 | ${{ steps.perf-test-low.outputs.perf_low_rps }} |
+            | 50 workers, HTTP/1.1 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |
+            | 50 workers, HTTP/2 | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |
+
+            <details>
+            <summary>View detailed test results</summary>
+
+            Test artifacts are available in the workflow run.
+
+            </details>
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  verify:
+    name: Verify Test Results
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check test status
+        run: |
+          if [ "${{ needs.test.result }}" == "success" ]; then
+            echo "✅ All HTTP Gateway tests passed successfully!"
+            exit 0
+          else
+            echo "❌ HTTP Gateway tests failed!"
+            echo "Please review the test results and fix any issues."
+            exit 1
+          fi

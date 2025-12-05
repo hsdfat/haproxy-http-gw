@@ -1,0 +1,14 @@
+FROM golang:1.24-alpine
+
+WORKDIR /app
+
+COPY test/backend/go.mod test/backend/go.sum ./
+RUN go mod download || true
+
+COPY test/backend/ ./
+
+RUN go build -o /backend-server .
+
+EXPOSE 9000
+
+CMD ["/backend-server"]
