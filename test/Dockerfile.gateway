@@ -22,7 +22,7 @@ RUN mkdir -p /etc/haproxy/certs \
 
 # Copy entrypoint
 COPY test/scripts/gateway-entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh && chown haproxy:haproxy /entrypoint.sh
 
 USER haproxy
 EXPOSE 8080 8443 9090
