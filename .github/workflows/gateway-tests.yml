@@ -18,12 +18,12 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_BUILDKIT: 1
-  COMPOSE_DOCKER_CLI_BUILD: 1
+  CONTAINER_RUNTIME: podman
+  COMPOSE_CMD: podman-compose
 
 jobs:
   test:
-    name: Gateway Tests
+    name: Gateway Tests (Podman)
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -31,16 +31,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Install Podman and podman-compose
+        run: |
+          # Podman is pre-installed on Ubuntu runners
+          podman --version
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
+          # Install podman-compose
+          pip install podman-compose
+          podman-compose --version
+
+      - name: Start Podman socket
+        run: |
+          systemctl --user start podman.socket
+          systemctl --user status podman.socket || true
 
       - name: Generate SSL certificates
         run: |
@@ -51,14 +54,12 @@ jobs:
       - name: Build test environment
         run: |
           cd test
-          docker compose build --parallel
-        env:
-          DOCKER_BUILDKIT: 1
+          podman-compose build
 
       - name: Start test environment
         run: |
           cd test
-          docker compose up -d
+          podman-compose up -d
           echo "Waiting for services to be ready..."
           sleep 30
 
@@ -66,7 +67,7 @@ jobs:
         run: |
           cd test
           echo "Checking service status..."
-          docker compose ps
+          podman-compose ps
 
           echo ""
           echo "Checking gateway health..."
@@ -81,7 +82,7 @@ jobs:
 
           if ! curl -sf http://localhost:8080/health > /dev/null 2>&1; then
             echo "✗ Gateway failed to become healthy"
-            docker compose logs gateway
+            podman-compose logs gateway
             exit 1
           fi
 
@@ -91,7 +92,7 @@ jobs:
             echo "✓ Backend API is healthy"
           else
             echo "✗ Backend API is not healthy"
-            docker compose logs backend-api
+            podman-compose logs backend-api
             exit 1
           fi
 
@@ -100,17 +101,17 @@ jobs:
         run: |
           cd test
           echo "=== Gateway Logs ==="
-          docker compose logs --tail=50 gateway || true
+          podman-compose logs --tail=50 gateway || true
           echo ""
           echo "=== Backend API Logs ==="
-          docker compose logs --tail=50 backend-api || true
+          podman-compose logs --tail=50 backend-api || true
 
       - name: Run functional tests
         id: functional-tests
         run: |
           cd test
           echo "Running functional tests..."
-          docker compose run --rm test-client /test-client \
+          podman-compose run --rm test-client /test-client \
             -gateway=http://gateway:8080 \
             -gateway-https=https://gateway:8443 \
             -verbose > functional-results.txt 2>&1
@@ -132,7 +133,7 @@ jobs:
         run: |
           cd test
           echo "Running low concurrency performance test..."
-          docker compose run --rm test-client /perf-client \
+          podman-compose run --rm test-client /perf-client \
             -url=http://gateway:8080 \
             -c=10 \
             -n=1000 > perf-low-results.txt 2>&1
@@ -167,7 +168,7 @@ jobs:
         run: |
           cd test
           echo "Running medium concurrency performance test..."
-          docker compose run --rm test-client /perf-client \
+          podman-compose run --rm test-client /perf-client \
             -url=http://gateway:8080 \
             -c=50 \
             -n=5000 > perf-medium-results.txt 2>&1
@@ -202,7 +203,7 @@ jobs:
         run: |
           cd test
           echo "Running HTTP/2 performance test..."
-          docker compose run --rm test-client /perf-client \
+          podman-compose run --rm test-client /perf-client \
             -url=http://gateway:8080 \
             -http2 \
             -c=50 \
@@ -281,26 +282,26 @@ jobs:
         run: |
           cd test
           echo "=== Gateway Logs ==="
-          docker compose logs gateway || true
+          podman-compose logs gateway || true
           echo ""
           echo "=== Backend API Logs ==="
-          docker compose logs backend-api || true
+          podman-compose logs backend-api || true
           echo ""
           echo "=== Backend Server Logs ==="
-          docker compose logs backend-server-1 backend-server-2 backend-server-3 || true
+          podman-compose logs backend-server-1 backend-server-2 backend-server-3 || true
 
-      - name: Collect Docker stats
+      - name: Collect Podman stats
         if: always()
         run: |
           cd test
-          echo "=== Docker Container Stats ==="
-          docker stats --no-stream || true
+          echo "=== Podman Container Stats ==="
+          podman stats --no-stream || true
 
       - name: Stop test environment
         if: always()
         run: |
           cd test
-          docker compose down -v
+          podman-compose down -v
 
       - name: Generate test summary
         if: always()

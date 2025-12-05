@@ -45,6 +45,12 @@ This test system provides:
 
 ### Prerequisites
 
+**Option 1: Using Podman (Recommended)**
+- Podman
+- podman-compose (install with `pip install podman-compose`)
+- OpenSSL (for certificate generation)
+
+**Option 2: Using Docker**
 - Docker
 - Docker Compose
 - OpenSSL (for certificate generation)
@@ -60,12 +66,30 @@ cd test
 
 2. **Start the Test Environment**
 
+**Using Podman (Default):**
+```bash
+podman-compose up -d
+# OR using make
+make up
+```
+
+**Using Docker:**
 ```bash
 docker-compose up -d
+# OR using make
+make CONTAINER_RUNTIME=docker up
 ```
 
 3. **Verify Services are Running**
 
+**Using Podman:**
+```bash
+podman-compose ps
+# OR using make
+make CONTAINER_RUNTIME=podman ps
+```
+
+**Using Docker:**
 ```bash
 docker-compose ps
 ```
@@ -84,20 +108,66 @@ http-gateway         Up                  0.0.0.0:8080->8080/tcp, 0.0.0.0:8443->8
 
 ### Running Tests
 
-#### Option 1: Run All Tests in Container
+#### Option 1: Using Make (Recommended - Works with both Podman and Docker)
 
+```bash
+# Run all tests (uses podman by default)
+make test
+
+# Run functional tests only
+make test-functional
+
+# Run performance tests only
+make test-perf
+
+# Quick smoke test
+make test-quick
+
+# Use Docker instead of Podman
+make CONTAINER_RUNTIME=docker test
+```
+
+#### Option 2: Run All Tests in Container
+
+**Using Podman:**
+```bash
+podman-compose run --rm test-client /usr/local/bin/run-tests.sh
+```
+
+**Using Docker:**
 ```bash
 docker-compose run --rm test-client /usr/local/bin/run-tests.sh
 ```
 
-#### Option 2: Run Individual Tests
+#### Option 3: Run Individual Tests
 
 **Functional Tests:**
+
+*Using Podman:*
+```bash
+podman-compose run --rm test-client /test-client -gateway=http://gateway:8080 -verbose
+```
+
+*Using Docker:*
 ```bash
 docker-compose run --rm test-client /test-client -gateway=http://gateway:8080 -verbose
 ```
 
 **Performance Tests:**
+
+*Using Podman:*
+```bash
+# Quick test (10 workers, 1000 requests)
+podman-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=10 -n=1000
+
+# Load test (100 workers, 10000 requests)
+podman-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=100 -n=10000
+
+# Duration-based test (20 workers, 30 seconds)
+podman-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=20 -d=30s
+```
+
+*Using Docker:*
 ```bash
 # Quick test (10 workers, 1000 requests)
 docker-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=10 -n=1000
@@ -268,6 +338,31 @@ Options:
 
 ### Scenario 1: Basic Functional Testing
 
+**Using Make (works with both Podman and Docker):**
+```bash
+# Setup and start environment
+make setup
+
+# Run functional tests
+make test-functional
+
+# Check results
+# All tests should pass with ✓ PASS status
+```
+
+**Using Podman directly:**
+```bash
+# Start environment
+podman-compose up -d
+
+# Run functional tests
+podman-compose run --rm test-client /test-client -verbose
+
+# Check results
+# All tests should pass with ✓ PASS status
+```
+
+**Using Docker directly:**
 ```bash
 # Start environment
 docker-compose up -d
@@ -312,6 +407,25 @@ done | sort | uniq -c
 
 ### Scenario 4: HTTP/2 Performance Testing
 
+**Using Podman:**
+```bash
+# Test HTTP/2 performance
+podman-compose run --rm test-client /perf-client \
+  -url=https://gateway:8443 \
+  -http2 \
+  -c=100 \
+  -n=50000
+
+# Compare with HTTP/1.1
+podman-compose run --rm test-client /perf-client \
+  -url=http://gateway:8080 \
+  -c=100 \
+  -n=50000
+
+# HTTP/2 should show better throughput and lower latency
+```
+
+**Using Docker:**
 ```bash
 # Test HTTP/2 performance
 docker-compose run --rm test-client /perf-client \
@@ -331,6 +445,19 @@ docker-compose run --rm test-client /perf-client \
 
 ### Scenario 5: High Concurrency Testing
 
+**Using Podman:**
+```bash
+# Stress test with high concurrency
+podman-compose run --rm test-client /perf-client \
+  -url=http://gateway:8080 \
+  -c=200 \
+  -d=2m
+
+# Monitor gateway performance
+podman stats http-gateway
+```
+
+**Using Docker:**
 ```bash
 # Stress test with high concurrency
 docker-compose run --rm test-client /perf-client \
@@ -346,24 +473,60 @@ docker stats http-gateway
 
 ### View Gateway Logs
 
+**Using Make:**
+```bash
+make logs
+```
+
+**Using Podman:**
+```bash
+podman-compose logs -f gateway
+```
+
+**Using Docker:**
 ```bash
 docker-compose logs -f gateway
 ```
 
 ### View Backend API Logs
 
+**Using Podman:**
+```bash
+podman-compose logs -f backend-api
+```
+
+**Using Docker:**
 ```bash
 docker-compose logs -f backend-api
 ```
 
 ### View Backend Server Logs
 
+**Using Podman:**
+```bash
+podman-compose logs -f backend-server-1 backend-server-2 backend-server-3
+```
+
+**Using Docker:**
 ```bash
 docker-compose logs -f backend-server-1 backend-server-2 backend-server-3
 ```
 
 ### Check HAProxy Stats
 
+**Using Podman:**
+```bash
+# Via runtime socket
+podman exec http-gateway sh -c "echo 'show stat' | socat - /var/run/haproxy-runtime-api.sock"
+
+# Check backends
+podman exec http-gateway sh -c "echo 'show backend' | socat - /var/run/haproxy-runtime-api.sock"
+
+# Check servers
+podman exec http-gateway sh -c "echo 'show servers state' | socat - /var/run/haproxy-runtime-api.sock"
+```
+
+**Using Docker:**
 ```bash
 # Via runtime socket
 docker exec http-gateway sh -c "echo 'show stat' | socat - /var/run/haproxy-runtime-api.sock"
@@ -381,6 +544,28 @@ If stats are enabled, access at: http://localhost:9090/stats
 
 ## Cleanup
 
+**Using Make (Recommended):**
+```bash
+# Stop services and remove volumes
+make clean
+
+# Complete cleanup and rebuild
+make reset
+```
+
+**Using Podman:**
+```bash
+# Stop all services
+podman-compose down
+
+# Remove volumes
+podman-compose down -v
+
+# Clean up everything including images
+podman-compose down -v --rmi all
+```
+
+**Using Docker:**
 ```bash
 # Stop all services
 docker-compose down
@@ -441,6 +626,19 @@ gateway:
 
 ### Gateway fails to start
 
+**Using Podman:**
+```bash
+# Check logs
+podman-compose logs gateway
+
+# Verify HAProxy is running
+podman exec http-gateway ps aux | grep haproxy
+
+# Check runtime socket
+podman exec http-gateway ls -la /var/run/haproxy-runtime-api.sock
+```
+
+**Using Docker:**
 ```bash
 # Check logs
 docker-compose logs gateway
@@ -454,6 +652,20 @@ docker exec http-gateway ls -la /var/run/haproxy-runtime-api.sock
 
 ### Tests fail with connection errors
 
+**Using Podman:**
+```bash
+# Verify all services are running
+podman-compose ps
+
+# Check network connectivity
+podman-compose exec test-client ping gateway
+podman-compose exec test-client ping backend-api
+
+# Wait longer for services to be ready
+podman-compose run --rm test-client sleep 10 && /usr/local/bin/run-tests.sh
+```
+
+**Using Docker:**
 ```bash
 # Verify all services are running
 docker-compose ps
@@ -468,6 +680,19 @@ docker-compose run --rm test-client sleep 10 && /usr/local/bin/run-tests.sh
 
 ### Backend API not updating
 
+**Using Podman:**
+```bash
+# Check backend API logs
+podman-compose logs backend-api
+
+# Verify backend data
+curl http://localhost:8000/backends | jq
+
+# Restart backend API
+podman-compose restart backend-api
+```
+
+**Using Docker:**
 ```bash
 # Check backend API logs
 docker-compose logs backend-api
@@ -481,6 +706,16 @@ docker-compose restart backend-api
 
 ### Performance tests showing low throughput
 
+**Using Podman:**
+```bash
+# Monitor resource usage
+podman stats
+
+# Reduce concurrency
+podman-compose run --rm test-client /perf-client -c=10 -n=1000
+```
+
+**Using Docker:**
 ```bash
 # Increase Docker resources (CPU/Memory)
 # Check Docker Desktop settings
