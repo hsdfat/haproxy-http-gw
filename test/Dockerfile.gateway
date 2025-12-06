@@ -20,9 +20,10 @@ RUN mkdir -p /etc/haproxy/certs \
     /tmp/haproxy-gateway \
     && chown -R haproxy:haproxy /etc/haproxy /var/run /tmp/haproxy-gateway
 
-# Copy entrypoint
+# Copy initial HAProxy config and entrypoint
+COPY test/haproxy-init.cfg /etc/haproxy/haproxy.cfg
 COPY test/scripts/gateway-entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && chown haproxy:haproxy /entrypoint.sh
+RUN chmod +x /entrypoint.sh && chown haproxy:haproxy /entrypoint.sh /etc/haproxy/haproxy.cfg
 
 USER haproxy
 EXPOSE 8080 8443 9090
