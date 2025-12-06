@@ -31,12 +31,19 @@ func main() {
 	logger := utils.GetLogger()
 	logger.SetLevel(utils.Info)
 
+	// Get runtime socket from environment or use default
+	runtimeSocket := os.Getenv("HAPROXY_RUNTIME_SOCKET")
+	if runtimeSocket == "" {
+		runtimeSocket = "/var/run/haproxy-runtime-api.sock"
+	}
+	logger.Infof("Using HAProxy runtime socket: %s", runtimeSocket)
+
 	// Initialize HAProxy API client
 	haproxyClient, err := api.New(
 		"/tmp/haproxy-gateway",          // transaction dir
 		"/etc/haproxy/haproxy.cfg",      // config file
 		"/usr/local/sbin/haproxy",       // haproxy binary
-		"/var/run/haproxy-runtime-api.sock", // runtime socket
+		runtimeSocket,                    // runtime socket
 	)
 	if err != nil {
 		logger.Error(err)
@@ -46,36 +53,32 @@ func main() {
 	// Example 1: Simple Provider with manual backend management
 	logger.Info("=== Example 1: Simple Provider ===")
 	runSimpleProviderExample(haproxyClient)
-
-	// Example 2: Polling Provider with dynamic backend discovery
-	logger.Info("\n=== Example 2: Polling Provider ===")
-	runPollingProviderExample(haproxyClient)
 }
 
 // Example 1: Simple Provider
 func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 	logger := utils.GetLogger()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Create a simple provider
 	provider := examples.NewSimpleProvider()
 
-	// Add some backends manually
+	// Add some backends manually (using actual test environment servers)
 	provider.AddBackend(gateway.Backend{
 		Name: "api-backend",
 		Servers: []gateway.BackendServer{
-			{Name: "api-server-1", IP: "10.0.1.10", Port: 8080},
-			{Name: "api-server-2", IP: "10.0.1.11", Port: 8080},
+			{Name: "backend-server-1", IP: "backend-server-1", Port: 9000},
+			{Name: "backend-server-2", IP: "backend-server-2", Port: 9000},
+			{Name: "backend-server-3", IP: "backend-server-3", Port: 9000},
 		},
 	})
 
 	provider.AddBackend(gateway.Backend{
 		Name: "web-backend",
 		Servers: []gateway.BackendServer{
-			{Name: "web-server-1", IP: "10.0.2.10", Port: 80},
-			{Name: "web-server-2", IP: "10.0.2.11", Port: 80},
-			{Name: "web-server-3", IP: "10.0.2.12", Port: 80},
+			{Name: "web-server-1", IP: "web-server-1", Port: 9000},
+			{Name: "web-server-2", IP: "web-server-2", Port: 9000},
 		},
 	})
 
@@ -88,11 +91,12 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 	})
 
 	// Create HTTP gateway with HTTP/2 support
+	// For test environment: HTTPS disabled to avoid cert validation errors
 	gw := gateway.NewHTTPGateway(haproxyClient, manager, gateway.GatewayConfig{
 		FrontendName: "http-gateway",
 		HTTPPort:     8080,
 		HTTPSPort:    8443,
-		HTTPSEnabled: true,
+		HTTPSEnabled: false,  // Disabled for test environment
 		SSLCertDir:   "/etc/haproxy/certs",
 		EnableHTTP2:  true,
 		ALPN:         "h2,http/1.1",
@@ -117,21 +121,15 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 	logger.Info("Gateway is running. Routes configured:")
 	logger.Info("  - api.example.com/api -> api-backend")
 	logger.Info("  - www.example.com/    -> web-backend")
+	logger.Info("Gateway is healthy and ready to serve traffic")
 
-	// Simulate a backend update after 5 seconds
-	time.Sleep(5 * time.Second)
-	logger.Info("Updating api-backend...")
-	provider.UpdateBackend(gateway.Backend{
-		Name: "api-backend",
-		Servers: []gateway.BackendServer{
-			{Name: "api-server-1", IP: "10.0.1.10", Port: 8080},
-			{Name: "api-server-2", IP: "10.0.1.11", Port: 8080},
-			{Name: "api-server-3", IP: "10.0.1.12", Port: 8080}, // New server
-		},
-	})
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
 
-	// Wait for shutdown
-	<-ctx.Done()
+	logger.Info("Shutting down gateway...")
+	cancel()
 	gw.Stop()
 }
 
