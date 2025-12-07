@@ -17,13 +17,18 @@ RUN chmod +x /usr/local/bin/http-gateway
 # Create directories
 RUN mkdir -p /etc/haproxy/certs \
     /var/run \
-    /tmp/haproxy-gateway \
-    && chown -R haproxy:haproxy /etc/haproxy /var/run /tmp/haproxy-gateway
+    /tmp/haproxy-gateway
 
 # Copy initial HAProxy config and entrypoint
-COPY test/haproxy-init.cfg /etc/haproxy/haproxy.cfg
-COPY test/scripts/gateway-entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && chown haproxy:haproxy /entrypoint.sh /etc/haproxy/haproxy.cfg
+COPY --chown=haproxy:haproxy test/haproxy-init.cfg /etc/haproxy/haproxy.cfg
+COPY --chown=haproxy:haproxy test/scripts/gateway-entrypoint.sh /entrypoint.sh
+
+# Set permissions and ownership (MUST be after all COPY operations)
+# Note: /etc/haproxy is a symlink to /usr/local/etc/haproxy in the base image
+RUN chmod +x /entrypoint.sh \
+    && chmod 644 /etc/haproxy/haproxy.cfg \
+    && chmod 775 /usr/local/etc/haproxy \
+    && chown -R haproxy:haproxy /usr/local/etc/haproxy /var/run /tmp/haproxy-gateway
 
 USER haproxy
 EXPOSE 8080 8443 9090

@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -109,19 +110,18 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 		os.Exit(1)
 	}
 
-	// Add routing rules
-	if err := gw.AddBackendRoute("api.example.com", "/api", "api-backend"); err != nil {
-		logger.Errorf("Failed to add API route: %v", err)
-	}
+	// Start API server for dynamic configuration
+	apiServer := gateway.NewAPIServer(gw, 9090)
+	go func() {
+		if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
+			logger.Errorf("API server error: %v", err)
+		}
+	}()
 
-	if err := gw.AddBackendRoute("www.example.com", "/", "web-backend"); err != nil {
-		logger.Errorf("Failed to add web route: %v", err)
-	}
-
-	logger.Info("Gateway is running. Routes configured:")
-	logger.Info("  - api.example.com/api -> api-backend")
-	logger.Info("  - www.example.com/    -> web-backend")
-	logger.Info("Gateway is healthy and ready to serve traffic")
+	logger.Info("Gateway is running and ready to accept configuration")
+	logger.Info("API server listening on :9090")
+	logger.Info("Use POST /api/routes to add routing rules")
+	logger.Info("Example: curl -X POST http://localhost:9090/api/routes -d '{\"host\":\"api.example.com\",\"path\":\"/api\",\"backend\":\"api-backend\"}'")
 
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
@@ -129,6 +129,7 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 	<-sigChan
 
 	logger.Info("Shutting down gateway...")
+	apiServer.Stop()
 	cancel()
 	gw.Stop()
 }

@@ -22,7 +22,6 @@ import (
 
 	"github.com/haproxytech/client-native/v6/models"
 	"github.com/haproxytech/kubernetes-ingress/pkg/haproxy/api"
-	"github.com/haproxytech/kubernetes-ingress/pkg/haproxy/instance"
 	"github.com/haproxytech/kubernetes-ingress/pkg/utils"
 )
 
@@ -36,6 +35,7 @@ type Manager struct {
 	stopChan      chan struct{}
 	wg            sync.WaitGroup
 	mu            sync.RWMutex
+	txMu          sync.Mutex // Mutex to serialize HAProxy transactions
 	backends      map[string]*Backend
 	syncPeriod    time.Duration
 }
@@ -155,6 +155,10 @@ func (m *Manager) handleBackendEvent(event BackendEvent) {
 func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 	logger.Debugf("Syncing backend %s to HAProxy", backend.Name)
 
+	// Serialize transactions to avoid race conditions
+	m.txMu.Lock()
+	defer m.txMu.Unlock()
+
 	// Start transaction
 	if err := m.haproxyClient.APIStartTransaction(); err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
@@ -172,11 +176,9 @@ func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 		},
 	}
 
-	_, created := m.haproxyClient.BackendCreateOrUpdate(haproxyBackend)
-	if created {
-		logger.Infof("Created backend: %s", backend.Name)
-		instance.Reload("backend '%s' created", backend.Name)
-	}
+	// Use BackendCreatePermanently to ensure backends are not deleted by other transactions
+	m.haproxyClient.BackendCreatePermanently(haproxyBackend)
+	logger.Infof("Created/updated backend: %s", backend.Name)
 
 	// Delete all existing servers first (for clean state)
 	if err := m.haproxyClient.BackendServerDeleteAll(backend.Name); err != nil {
@@ -198,12 +200,8 @@ func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 		}
 	}
 
-	// Commit transaction
-	if err := m.haproxyClient.APICommitTransaction(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	// Final commit (processes backends)
+	// Final commit (processes backends and commits the transaction)
+	// Note: APIFinalCommitTransaction handles both backend processing and transaction commit
 	if err := m.haproxyClient.APIFinalCommitTransaction(); err != nil {
 		return fmt.Errorf("failed to final commit transaction: %w", err)
 	}
