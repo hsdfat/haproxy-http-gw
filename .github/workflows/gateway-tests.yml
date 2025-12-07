@@ -390,56 +390,114 @@ jobs:
       - name: Generate test summary
         if: always()
         run: |
-          echo "# HTTP Gateway Test Results" >> $GITHUB_STEP_SUMMARY
+          # Calculate overall status
+          FUNCTIONAL="${{ steps.functional-tests.outputs.functional_tests_passed }}"
+          PERF_LOW="${{ steps.perf-test-low.outputs.perf_low_passed }}"
+          PERF_MED="${{ steps.perf-test-medium.outputs.perf_medium_passed }}"
+          PERF_HTTP2="${{ steps.perf-test-http2.outputs.perf_http2_passed }}"
+          DYNAMIC="${{ steps.dynamic-backend-test.outputs.dynamic_backend_passed }}"
+
+          if [ "$FUNCTIONAL" == "true" ] && [ "$PERF_LOW" == "true" ] && [ "$PERF_MED" == "true" ] && [ "$PERF_HTTP2" == "true" ] && [ "$DYNAMIC" == "true" ]; then
+            OVERALL_STATUS="✅ ALL TESTS PASSED"
+            OVERALL_EMOJI="🎉"
+          else
+            OVERALL_STATUS="❌ SOME TESTS FAILED"
+            OVERALL_EMOJI="⚠️"
+          fi
+
+          # Generate comprehensive summary
+          echo "# $OVERALL_EMOJI HTTP Gateway Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "> **Overall Status:** $OVERALL_STATUS" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## 📊 Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Test Category | Status | Details |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "|--------------|:------:|---------|" >> $GITHUB_STEP_SUMMARY
 
           # Functional tests
           if [ "${{ steps.functional-tests.outputs.functional_tests_passed }}" == "true" ]; then
-            echo "| Functional Tests | ✅ PASS | All tests passed |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Functional Tests** | ✅ PASS | All tests passed |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Functional Tests | ❌ FAIL | Some tests failed |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Functional Tests** | ❌ FAIL | Some tests failed - check artifacts |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # Performance test - low
           if [ "${{ steps.perf-test-low.outputs.perf_low_passed }}" == "true" ]; then
-            echo "| Performance (Low) | ✅ PASS | RPS: ${{ steps.perf-test-low.outputs.perf_low_rps }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Performance (Low)** | ✅ PASS | 8 workers, 1,000 requests |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Performance (Low) | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Performance (Low)** | ❌ FAIL | Success rate < 99% |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # Performance test - medium
           if [ "${{ steps.perf-test-medium.outputs.perf_medium_passed }}" == "true" ]; then
-            echo "| Performance (Medium) | ✅ PASS | RPS: ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Performance (Medium)** | ✅ PASS | 16 workers, 20,000 requests |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Performance (Medium) | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Performance (Medium)** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # Performance test - HTTP/2 (H2C)
           if [ "${{ steps.perf-test-http2.outputs.perf_http2_passed }}" == "true" ]; then
-            echo "| HTTP/2 Performance (H2C) | ✅ PASS | RPS: ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C)** | ✅ PASS | 32 workers, 100,000 requests |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| HTTP/2 Performance (H2C) | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C)** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # Dynamic backend test
           if [ "${{ steps.dynamic-backend-test.outputs.dynamic_backend_passed }}" == "true" ]; then
-            echo "| Dynamic Backend | ✅ PASS | Backend updates working |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Dynamic Backend** | ✅ PASS | Registration & unregistration working |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Dynamic Backend | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Dynamic Backend** | ❌ FAIL | Backend updates not working |" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Performance Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Performance Metrics" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Configuration | Requests/sec |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------------|--------------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 10 workers, HTTP/1.1 | ${{ steps.perf-test-low.outputs.perf_low_rps }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 50 workers, HTTP/1.1 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 50 workers, HTTP/2 (H2C) | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Configuration | Concurrency | Total Requests | Requests/sec | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------------|:-----------:|:--------------:|:------------:|:------:|" >> $GITHUB_STEP_SUMMARY
+
+          # Low concurrency
+          RPS_LOW="${{ steps.perf-test-low.outputs.perf_low_rps }}"
+          if [ -n "$RPS_LOW" ]; then
+            echo "| HTTP/1.1 (Low) | 8 | 1,000 | **${RPS_LOW}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| HTTP/1.1 (Low) | 8 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Medium concurrency
+          RPS_MED="${{ steps.perf-test-medium.outputs.perf_medium_rps }}"
+          if [ -n "$RPS_MED" ]; then
+            echo "| HTTP/1.1 (Medium) | 16 | 20,000 | **${RPS_MED}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| HTTP/1.1 (Medium) | 16 | 20,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # HTTP/2
+          RPS_HTTP2="${{ steps.perf-test-http2.outputs.perf_http2_rps }}"
+          if [ -n "$RPS_HTTP2" ]; then
+            echo "| HTTP/2 (H2C) | 32 | 100,000 | **${RPS_HTTP2}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| HTTP/2 (H2C) | 32 | 100,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Test Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Detailed test results are available in the **Artifacts** section:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`functional-results.txt\` - Functional test output" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-low-results.txt\` - Low concurrency performance results" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-medium-results.txt\` - Medium concurrency performance results" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-http2-results.txt\` - HTTP/2 (H2C) performance results" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## ℹ️ Environment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runner:** ubuntu-latest" >> $GITHUB_STEP_SUMMARY
+          echo "- **Container Runtime:** Podman" >> $GITHUB_STEP_SUMMARY
+          echo "- **Go Version:** 1.21" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow:** \`${{ github.workflow }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run ID:** \`${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && always()
