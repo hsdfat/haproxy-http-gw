@@ -1,14 +1,25 @@
 FROM golang:1.24-alpine
 
+# Install tools for backend registration and IP detection
+RUN apk add --no-cache curl jq bash iproute2
+
 WORKDIR /app
 
 COPY test/backend/go.mod test/backend/go.sum ./
 RUN go mod download || true
 
 COPY test/backend/ ./
-
 RUN go build -o /backend-server .
+
+# Copy registration script
+COPY test/scripts/register-backend.sh /register-backend.sh
+RUN chmod +x /register-backend.sh
+
+# Copy entrypoint script
+COPY test/scripts/backend-entrypoint.sh /backend-entrypoint.sh
+RUN chmod +x /backend-entrypoint.sh
 
 EXPOSE 9000
 
+ENTRYPOINT ["/backend-entrypoint.sh"]
 CMD ["/backend-server"]

@@ -264,3 +264,37 @@ func (m *Manager) GetBackends() map[string]*Backend {
 	}
 	return result
 }
+
+// RegisterBackend registers a new backend and syncs it to HAProxy
+func (m *Manager) RegisterBackend(backend Backend) error {
+	m.mu.Lock()
+	m.backends[backend.Name] = &backend
+	m.mu.Unlock()
+
+	// Sync to HAProxy immediately
+	if err := m.syncBackendToHAProxy(&backend); err != nil {
+		logger.Errorf("Error syncing registered backend %s: %v", backend.Name, err)
+		return err
+	}
+
+	logger.Infof("Backend %s registered successfully with %d servers", backend.Name, len(backend.Servers))
+	return nil
+}
+
+// UnregisterBackend removes a backend and deletes it from HAProxy
+func (m *Manager) UnregisterBackend(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.backends[name]; !exists {
+		return fmt.Errorf("backend %s not found", name)
+	}
+
+	delete(m.backends, name)
+
+	// Delete from HAProxy
+	m.haproxyClient.BackendDelete(name)
+
+	logger.Infof("Backend %s unregistered successfully", name)
+	return nil
+}

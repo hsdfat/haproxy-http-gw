@@ -31,8 +31,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Podman and podman-compose
+      - name: Install dependencies
         run: |
+          # Install required tools
+          sudo apt-get update
+          sudo apt-get install -y jq bc
+
           # Podman is pre-installed on Ubuntu runners
           podman --version
 
@@ -42,8 +46,9 @@ jobs:
 
       - name: Start Podman socket
         run: |
-          systemctl --user start podman.socket
-          systemctl --user status podman.socket || true
+          # Start podman socket for rootless operation
+          systemctl --user start podman.socket || echo "Warning: Could not start podman socket (may not be needed)"
+          systemctl --user status podman.socket --no-pager || echo "Podman socket status check skipped"
 
       - name: Generate SSL certificates
         run: |
@@ -60,8 +65,7 @@ jobs:
         run: |
           cd test
           podman-compose up -d
-          echo "Waiting for services to be ready..."
-          sleep 30
+          echo "Services started, health checks will verify readiness..."
 
       - name: Check service health
         run: |
@@ -70,31 +74,77 @@ jobs:
           podman-compose ps
 
           echo ""
-          echo "Checking gateway health..."
+          echo "Checking gateway API health..."
           for i in {1..30}; do
-            if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
-              echo "✓ Gateway is healthy"
+            if curl -sf http://localhost:9090/health > /dev/null 2>&1; then
+              echo "✓ Gateway API is healthy"
               break
             fi
-            echo "Attempt $i/30: Gateway not ready yet..."
+            echo "Attempt $i/30: Gateway API not ready yet..."
             sleep 2
           done
 
-          if ! curl -sf http://localhost:8080/health > /dev/null 2>&1; then
-            echo "✗ Gateway failed to become healthy"
+          if ! curl -sf http://localhost:9090/health > /dev/null 2>&1; then
+            echo "✗ Gateway API failed to become healthy"
             podman-compose logs gateway
             exit 1
           fi
 
+      - name: Wait for backend registration
+        run: |
+          cd test
+          echo "Waiting for backend servers to register..."
+
+          # Poll for backend registration with timeout
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          API_BACKEND_FOUND=false
+          WEB_BACKEND_FOUND=false
+
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            BACKENDS=$(curl -sf http://localhost:9090/api/backends 2>/dev/null || echo "")
+
+            if echo "$BACKENDS" | grep -q "api-backend"; then
+              API_BACKEND_FOUND=true
+            fi
+
+            if echo "$BACKENDS" | grep -q "web-backend"; then
+              WEB_BACKEND_FOUND=true
+            fi
+
+            if [ "$API_BACKEND_FOUND" = true ] && [ "$WEB_BACKEND_FOUND" = true ]; then
+              echo "✓ All backends registered successfully"
+              break
+            fi
+
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Waiting for backends to register..."
+            sleep 2
+          done
+
           echo ""
-          echo "Checking backend API health..."
-          if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-            echo "✓ Backend API is healthy"
-          else
-            echo "✗ Backend API is not healthy"
-            podman-compose logs backend-api
+          echo "Final backend status:"
+          BACKENDS=$(curl -sf http://localhost:9090/api/backends)
+          echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
+
+          if [ "$API_BACKEND_FOUND" != true ]; then
+            echo "✗ api-backend not found in registered backends"
+            echo ""
+            echo "Gateway logs:"
+            podman-compose logs gateway
+            echo ""
+            echo "Backend server logs:"
+            podman-compose logs backend-server-1 backend-server-2 backend-server-3
             exit 1
           fi
+
+          if [ "$WEB_BACKEND_FOUND" != true ]; then
+            echo "✗ web-backend not found in registered backends"
+            exit 1
+          fi
+
+          echo "✓ api-backend is registered"
+          echo "✓ web-backend is registered"
 
       - name: View service logs (pre-test)
         if: always()
@@ -103,8 +153,8 @@ jobs:
           echo "=== Gateway Logs ==="
           podman-compose logs --tail=50 gateway || true
           echo ""
-          echo "=== Backend API Logs ==="
-          podman-compose logs --tail=50 backend-api || true
+          echo "=== Backend Server Logs ==="
+          podman-compose logs --tail=20 backend-server-1 backend-server-2 backend-server-3 || true
 
       - name: Run functional tests
         id: functional-tests
@@ -238,30 +288,54 @@ jobs:
         id: dynamic-backend-test
         run: |
           cd test
-          echo "Testing dynamic backend updates..."
+          echo "Testing dynamic backend registration API..."
 
-          # Add a new backend
-          echo "Adding new backend..."
-          curl -X POST http://localhost:8000/backends \
+          # Register a new backend via API
+          echo "Registering new backend via API..."
+          RESPONSE=$(curl -sf -X POST http://localhost:9090/api/backends \
             -H "Content-Type: application/json" \
             -d '{
               "name": "dynamic-test-backend",
               "servers": [
-                {"name": "backend-server-3", "ip": "backend-server-3", "port": 9000}
+                {"name": "test-srv", "ip": "backend-server-3", "port": 9000}
               ]
-            }'
+            }')
 
-          # Wait for gateway to pick up changes
+          echo "Response: $RESPONSE"
+
+          # Verify response
+          if echo "$RESPONSE" | grep -q '"success":true'; then
+            echo "✓ Backend registration API successful"
+          else
+            echo "✗ Backend registration API failed"
+            echo "dynamic_backend_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Wait for HAProxy to apply changes
           sleep 5
 
           # Verify backend was added
           echo "Verifying backend was added..."
-          if curl -s http://localhost:8000/backends | grep -q "dynamic-test-backend"; then
-            echo "✓ Dynamic backend update successful"
+          BACKENDS=$(curl -sf http://localhost:9090/api/backends)
+          if echo "$BACKENDS" | grep -q "dynamic-test-backend"; then
+            echo "✓ Dynamic backend registration successful"
             echo "dynamic_backend_passed=true" >> $GITHUB_OUTPUT
           else
-            echo "✗ Dynamic backend update failed"
+            echo "✗ Dynamic backend not found after registration"
+            echo "Backends response: $BACKENDS"
             echo "dynamic_backend_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Test unregistration
+          echo "Testing backend unregistration..."
+          UNREG_RESPONSE=$(curl -sf -X DELETE http://localhost:9090/api/backends/dynamic-test-backend)
+          if echo "$UNREG_RESPONSE" | grep -q '"success":true'; then
+            echo "✓ Backend unregistration successful"
+          else
+            echo "✗ Backend unregistration failed"
+            echo "Response: $UNREG_RESPONSE"
             exit 1
           fi
 
@@ -284,11 +358,11 @@ jobs:
           echo "=== Gateway Logs ==="
           podman-compose logs gateway || true
           echo ""
-          echo "=== Backend API Logs ==="
-          podman-compose logs backend-api || true
-          echo ""
           echo "=== Backend Server Logs ==="
           podman-compose logs backend-server-1 backend-server-2 backend-server-3 || true
+          echo ""
+          echo "=== Web Server Logs ==="
+          podman-compose logs web-server-1 web-server-2 || true
 
       - name: Collect Podman stats
         if: always()

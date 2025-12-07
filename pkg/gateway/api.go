@@ -44,6 +44,26 @@ type RouteResponse struct {
 	Routes  []RouteConfig `json:"routes,omitempty"`
 }
 
+// BackendRegistrationRequest represents a backend registration request
+type BackendRegistrationRequest struct {
+	Name    string                 `json:"name"`
+	Servers []BackendServerRequest `json:"servers"`
+}
+
+// BackendServerRequest represents a server in a backend registration
+type BackendServerRequest struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
+}
+
+// BackendRegistrationResponse represents the response for backend registration
+type BackendRegistrationResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+	Backend string `json:"backend,omitempty"`
+}
+
 // NewAPIServer creates a new API server for gateway configuration
 func NewAPIServer(gateway *HTTPGateway, port int) *APIServer {
 	api := &APIServer{
@@ -57,6 +77,11 @@ func NewAPIServer(gateway *HTTPGateway, port int) *APIServer {
 	mux.HandleFunc("POST /api/routes", api.addRoute)
 	mux.HandleFunc("GET /api/routes", api.listRoutes)
 	mux.HandleFunc("DELETE /api/routes", api.deleteRoute)
+
+	// Backend registration endpoints
+	mux.HandleFunc("POST /api/backends", api.registerBackend)
+	mux.HandleFunc("GET /api/backends", api.listBackends)
+	mux.HandleFunc("DELETE /api/backends/{name}", api.unregisterBackend)
 
 	// Health endpoint
 	mux.HandleFunc("GET /health", api.health)
@@ -181,6 +206,117 @@ func (a *APIServer) sendError(w http.ResponseWriter, status int, message string)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(RouteResponse{
+		Success: false,
+		Message: message,
+	})
+}
+
+// registerBackend handles POST /api/backends - registers a new backend
+func (a *APIServer) registerBackend(w http.ResponseWriter, r *http.Request) {
+	var req BackendRegistrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.sendBackendError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
+		return
+	}
+
+	// Validate input
+	if req.Name == "" {
+		a.sendBackendError(w, http.StatusBadRequest, "Backend name is required")
+		return
+	}
+	if len(req.Servers) == 0 {
+		a.sendBackendError(w, http.StatusBadRequest, "At least one server is required")
+		return
+	}
+
+	// Validate servers
+	for i, srv := range req.Servers {
+		if srv.Name == "" {
+			a.sendBackendError(w, http.StatusBadRequest, fmt.Sprintf("Server %d: name is required", i))
+			return
+		}
+		if srv.IP == "" {
+			a.sendBackendError(w, http.StatusBadRequest, fmt.Sprintf("Server %s: IP is required", srv.Name))
+			return
+		}
+		if srv.Port <= 0 || srv.Port > 65535 {
+			a.sendBackendError(w, http.StatusBadRequest, fmt.Sprintf("Server %s: invalid port %d", srv.Name, srv.Port))
+			return
+		}
+	}
+
+	// Convert to backend format
+	servers := make([]BackendServer, len(req.Servers))
+	for i, srv := range req.Servers {
+		servers[i] = BackendServer{
+			Name: srv.Name,
+			IP:   srv.IP,
+			Port: srv.Port,
+		}
+	}
+
+	backend := Backend{
+		Name:    req.Name,
+		Servers: servers,
+	}
+
+	// Register backend with the manager
+	if err := a.gateway.RegisterBackend(backend); err != nil {
+		a.sendBackendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to register backend: %v", err))
+		return
+	}
+
+	logger.Infof("Backend registered via API: %s with %d servers", req.Name, len(servers))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(BackendRegistrationResponse{
+		Success: true,
+		Message: "Backend registered successfully",
+		Backend: req.Name,
+	})
+}
+
+// listBackends handles GET /api/backends - lists all registered backends
+func (a *APIServer) listBackends(w http.ResponseWriter, r *http.Request) {
+	backends := a.gateway.GetBackends()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"backends": backends,
+	})
+}
+
+// unregisterBackend handles DELETE /api/backends/{name} - unregisters a backend
+func (a *APIServer) unregisterBackend(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		a.sendBackendError(w, http.StatusBadRequest, "Backend name is required")
+		return
+	}
+
+	if err := a.gateway.UnregisterBackend(name); err != nil {
+		a.sendBackendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to unregister backend: %v", err))
+		return
+	}
+
+	logger.Infof("Backend unregistered via API: %s", name)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(BackendRegistrationResponse{
+		Success: true,
+		Message: "Backend unregistered successfully",
+		Backend: name,
+	})
+}
+
+// sendBackendError sends an error response for backend operations
+func (a *APIServer) sendBackendError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(BackendRegistrationResponse{
 		Success: false,
 		Message: message,
 	})

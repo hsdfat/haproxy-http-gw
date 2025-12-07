@@ -106,6 +106,21 @@ func (g *HTTPGateway) Start(ctx context.Context) error {
 	return nil
 }
 
+// StartWithoutFrontend starts the gateway without configuring the frontend
+// This is used when the frontend is statically configured in haproxy.cfg
+func (g *HTTPGateway) StartWithoutFrontend(ctx context.Context) error {
+	logger.Info("Starting HTTP Gateway (frontend pre-configured)")
+
+	// Start the backend manager
+	if err := g.manager.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start manager: %w", err)
+	}
+
+	logger.Infof("HTTP Gateway started with pre-configured frontend on HTTP:%d", g.config.HTTPPort)
+	logger.Info("Backends will be registered dynamically via API")
+	return nil
+}
+
 // Stop stops the HTTP gateway
 func (g *HTTPGateway) Stop() error {
 	logger.Info("Stopping HTTP Gateway")
@@ -342,4 +357,21 @@ func sanitizeName(name string) string {
 		}
 	}
 	return result
+}
+
+// RegisterBackend registers a new backend with the gateway
+func (g *HTTPGateway) RegisterBackend(backend Backend) error {
+	logger.Infof("Registering backend: %s with %d servers", backend.Name, len(backend.Servers))
+	return g.manager.RegisterBackend(backend)
+}
+
+// UnregisterBackend removes a backend from the gateway
+func (g *HTTPGateway) UnregisterBackend(name string) error {
+	logger.Infof("Unregistering backend: %s", name)
+	return g.manager.UnregisterBackend(name)
+}
+
+// GetBackends returns all registered backends
+func (g *HTTPGateway) GetBackends() map[string]*Backend {
+	return g.manager.GetBackends()
 }

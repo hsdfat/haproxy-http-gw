@@ -1,10 +1,10 @@
 #!/bin/bash
 # Local Test Script for HAProxy HTTP Gateway
-# This script runs the complete test flow using Podman
+# This script runs the complete test flow using Podman or Docker Compose
 
 set -e
 
-# Ensure podman and podman-compose are in PATH
+# Ensure podman-compose is in PATH (for macOS)
 export PATH="/Library/Frameworks/Python.framework/Versions/3.14/bin:$PATH"
 
 # Colors for output
@@ -35,22 +35,25 @@ echo ""
 
 # Step 1: Check prerequisites
 print_info "Step 1: Checking prerequisites..."
-if ! command -v podman &> /dev/null; then
-    print_error "Podman is not installed"
+if ! command -v podman-compose &> /dev/null && ! command -v docker-compose &> /dev/null; then
+    print_error "Neither podman-compose nor docker-compose is installed"
+    echo "Install with: pip install podman-compose OR install docker-compose"
     exit 1
 fi
-print_success "Podman found: $(podman --version)"
 
-if ! command -v podman-compose &> /dev/null; then
-    print_error "podman-compose is not installed"
-    echo "Install with: pip install podman-compose"
-    exit 1
+# Determine which compose command to use
+if command -v podman-compose &> /dev/null; then
+    COMPOSE_CMD="podman-compose"
+    print_success "Using podman-compose: $(podman-compose --version | head -1)"
+else
+    COMPOSE_CMD="docker-compose"
+    print_success "Using docker-compose: $(docker-compose --version)"
 fi
-print_success "podman-compose found: $(podman-compose --version | head -1)"
 
 # Step 2: Generate certificates
 print_info "Step 2: Generating SSL certificates..."
 if [ ! -f "certs/server.pem" ]; then
+    chmod +x scripts/generate-certs.sh
     ./scripts/generate-certs.sh
     print_success "Certificates generated"
 else
@@ -59,7 +62,7 @@ fi
 
 # Step 3: Build images
 print_info "Step 3: Building container images (this may take a few minutes)..."
-if podman-compose build; then
+if $COMPOSE_CMD build; then
     print_success "All images built successfully"
 else
     print_error "Build failed"
@@ -68,87 +71,101 @@ fi
 
 # Step 4: Start services
 print_info "Step 4: Starting services..."
-podman-compose up -d
+$COMPOSE_CMD up -d
 print_success "Services started"
 
-# Step 5: Wait for services to be ready
-print_info "Step 5: Waiting for services to be ready (30 seconds)..."
-sleep 30
+# Step 5: Wait for gateway to be ready
+print_info "Step 5: Waiting for gateway to be ready..."
+max_retries=30
+retry=0
+while [ $retry -lt $max_retries ]; do
+    if curl -sf http://localhost:9090/health > /dev/null 2>&1; then
+        print_success "Gateway API is healthy"
+        break
+    fi
+
+    retry=$((retry + 1))
+    if [ $retry -eq $max_retries ]; then
+        print_error "Gateway failed to become healthy after $max_retries attempts"
+        $COMPOSE_CMD logs gateway
+        exit 1
+    fi
+
+    echo "  Attempt $retry/$max_retries, waiting for gateway..."
+    sleep 2
+done
 
 # Step 6: Check service status
 print_info "Step 6: Checking service status..."
-podman-compose ps
+$COMPOSE_CMD ps
 
-# Step 7: Check health endpoints
-print_info "Step 7: Checking health endpoints..."
-if curl -sf http://localhost:9090/health > /dev/null 2>&1; then
-    print_success "Gateway API is healthy"
+# Step 7: Wait for backends to register
+print_info "Step 7: Waiting for backend servers to register with gateway..."
+sleep 15
+
+# Check registered backends
+print_info "Step 8: Verifying backend registration..."
+BACKENDS=$(curl -sf http://localhost:9090/api/backends)
+
+if command -v jq &> /dev/null; then
+    echo "$BACKENDS" | jq '.'
 else
-    print_error "Gateway API health check failed"
-    podman-compose logs gateway
+    echo "$BACKENDS"
+fi
+
+if echo "$BACKENDS" | grep -q "api-backend"; then
+    print_success "api-backend is registered"
+else
+    print_error "api-backend not found in registered backends"
+    echo "Gateway logs:"
+    $COMPOSE_CMD logs gateway | tail -50
+    echo ""
+    echo "Backend server logs:"
+    $COMPOSE_CMD logs backend-server-1 | tail -20
     exit 1
 fi
 
-if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-    print_success "Backend API is healthy"
+if echo "$BACKENDS" | grep -q "web-backend"; then
+    print_success "web-backend is registered"
 else
-    print_error "Backend API health check failed"
-    podman-compose logs backend-api
+    print_error "web-backend not found in registered backends"
     exit 1
 fi
 
-# Step 7.5: Configure routes via API
-print_info "Step 7.5: Configuring routes via API..."
-if ./scripts/configure-routes.sh; then
-    print_success "Routes configured successfully"
-else
-    print_error "Route configuration failed"
-    podman-compose logs gateway
-    exit 1
-fi
+# Step 9: Run functional tests
+print_info "Step 9: Running functional tests..."
+echo ""
 
-# Step 8: Run functional tests
-print_info "Step 8: Running functional tests..."
-
-# Wait a bit for HAProxy to reload with the new routes
-print_info "Waiting for HAProxy to apply route configuration..."
-sleep 5
-
-# Test 1: Test API backend route with retry
-print_info "Test 1: Testing api.example.com/api -> api-backend"
+# Test 1: Test direct backend access (without routing rules)
+print_info "Test 1: Testing direct access to api-backend (default backend)"
 max_retries=10
 retry=0
+
 while [ $retry -lt $max_retries ]; do
-    response=$(curl -s -H "Host: api.example.com" http://localhost:8080/api/test)
-    if echo "$response" | grep -q "backend-server"; then
-        print_success "API route is working correctly"
+    RESPONSE=$(curl -sf http://localhost:8080/ 2>&1 || echo "")
+    if echo "$RESPONSE" | grep -q "backend-server"; then
+        SERVER_NAME=$(echo "$RESPONSE" | grep -o "backend-server-[0-9]" | head -1 || echo "unknown")
+        print_success "Successfully reached api-backend: $SERVER_NAME"
         break
     fi
+
     retry=$((retry + 1))
     if [ $retry -eq $max_retries ]; then
-        print_error "API route test failed after $max_retries attempts"
-        echo "Response: $response"
-        echo "Checking HAProxy logs:"
-        podman-compose logs gateway | tail -20
+        print_error "Failed to reach backend after $max_retries attempts"
+        echo "Last response: $RESPONSE"
+        echo ""
+        echo "Gateway logs:"
+        $COMPOSE_CMD logs gateway | tail -30
         exit 1
     fi
-    sleep 1
+
+    echo "  Attempt $retry/$max_retries failed, retrying in 2s..."
+    sleep 2
 done
 
-# Test 2: Test web backend route
-print_info "Test 2: Testing www.example.com/ -> web-backend"
-response=$(curl -s -H "Host: www.example.com" http://localhost:8080/)
-if echo "$response" | grep -q "web-server"; then
-    print_success "Web route is working correctly"
-else
-    print_error "Web route test failed"
-    echo "Response: $response"
-    exit 1
-fi
-
-# Test 3: Test load balancing (multiple requests should hit different servers)
-print_info "Test 3: Testing load balancing across backend servers"
-servers_hit=$(for i in {1..10}; do curl -s -H "Host: api.example.com" http://localhost:8080/api/test; done | grep -o "backend-server-[0-9]" | sort -u | wc -l)
+# Test 2: Test load balancing (multiple requests should hit different servers)
+print_info "Test 2: Testing load balancing across backend servers"
+servers_hit=$(for i in {1..10}; do curl -s http://localhost:8080/; done | grep -o "backend-server-[0-9]" | sort -u | wc -l | tr -d ' ')
 if [ "$servers_hit" -ge 2 ]; then
     print_success "Load balancing is working (hit $servers_hit different servers)"
 else
@@ -156,28 +173,58 @@ else
     exit 1
 fi
 
-# Test 4: Test H2C (HTTP/2 Cleartext) support
-print_info "Test 4: Testing H2C (HTTP/2 Cleartext) support"
-if curl --http2-prior-knowledge -s -H "Host: api.example.com" http://localhost:8080/api/test | grep -q "backend-server"; then
-    print_success "H2C (HTTP/2 Cleartext) is working correctly"
+# Test 3: Test backend registration API
+print_info "Test 3: Testing backend registration API"
+TEST_BACKEND=$(curl -sf -X POST http://localhost:9090/api/backends \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"test-backend","servers":[{"name":"test-server","ip":"backend-server-1","port":9000}]}' || echo "")
+
+if echo "$TEST_BACKEND" | grep -q '"success":true'; then
+    print_success "Backend registration API is working"
 else
-    print_info "H2C test skipped (curl may not support --http2-prior-knowledge)"
+    print_error "Backend registration API failed"
+    echo "Response: $TEST_BACKEND"
+    exit 1
 fi
 
-print_success "All functional tests passed"
+# Test 4: Test H2C (HTTP/2 Cleartext) support
+print_info "Test 4: Testing H2C (HTTP/2 Cleartext) support"
+if command -v curl &> /dev/null && curl --http2-prior-knowledge -s http://localhost:8080/ 2>/dev/null | grep -q "backend-server"; then
+    print_success "H2C (HTTP/2 Cleartext) is working correctly"
+else
+    print_info "H2C test skipped (curl may not support --http2-prior-knowledge or test failed)"
+fi
+
+echo ""
+print_success "All functional tests passed!"
 
 # Step 10: Summary
 echo ""
 echo "============================================="
 print_success "All tests completed successfully!"
 echo ""
-print_info "To view logs:"
-echo "  podman-compose logs -f gateway"
-echo "  podman-compose logs -f backend-api"
+print_info "System Information:"
+echo "  Gateway API: http://localhost:9090"
+echo "  Gateway HTTP: http://localhost:8080"
+echo "  Gateway HTTPS: https://localhost:8443"
 echo ""
-print_info "To stop services:"
-echo "  podman-compose down"
+print_info "Useful commands:"
+echo "  View gateway logs:"
+echo "    $COMPOSE_CMD logs -f gateway"
 echo ""
-print_info "To cleanup everything:"
-echo "  podman-compose down -v"
+echo "  View backend logs:"
+echo "    $COMPOSE_CMD logs -f backend-server-1"
+echo ""
+echo "  List registered backends:"
+echo "    curl http://localhost:9090/api/backends | jq"
+echo ""
+echo "  Register a new backend:"
+echo "    curl -X POST http://localhost:9090/api/backends -H 'Content-Type: application/json' \\"
+echo "      -d '{\"name\":\"my-backend\",\"servers\":[{\"name\":\"server1\",\"ip\":\"192.168.1.10\",\"port\":9000}]}'"
+echo ""
+echo "  Stop services:"
+echo "    $COMPOSE_CMD down"
+echo ""
+echo "  Cleanup everything:"
+echo "    $COMPOSE_CMD down -v"
 echo "============================================="

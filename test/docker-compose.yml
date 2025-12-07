@@ -8,20 +8,14 @@ services:
     ports:
       - "8080:8080"   # HTTP
       - "8443:8443"   # HTTPS
-      - "9090:9090"   # Stats/Admin
+      - "9090:9090"   # API/Stats
     volumes:
       - ./certs:/etc/haproxy/certs:ro
       - haproxy-config:/tmp/haproxy-gateway
     environment:
       - LOG_LEVEL=debug
-      - BACKEND_API_URL=http://backend-api:8000
     networks:
       - gateway-net
-    depends_on:
-      - backend-api
-      - backend-server-1
-      - backend-server-2
-      - backend-server-3
     restart: unless-stopped
 
   # Backend API Provider (REST API for dynamic backend discovery)
@@ -39,6 +33,8 @@ services:
     restart: unless-stopped
 
   # Mock Backend Servers (HTTP/2 enabled)
+  # These servers will auto-register with the gateway on startup
+  # SERVER_IP is auto-detected from the container's network interface
   backend-server-1:
     build:
       context: ..
@@ -46,10 +42,15 @@ services:
     container_name: backend-server-1
     environment:
       - SERVER_NAME=backend-server-1
+      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
+      - BACKEND_NAME=api-backend
+      - GATEWAY_URL=http://gateway:9090
       - ENABLE_HTTP2=true
     networks:
       - gateway-net
+    depends_on:
+      - gateway
     restart: unless-stopped
 
   backend-server-2:
@@ -59,10 +60,15 @@ services:
     container_name: backend-server-2
     environment:
       - SERVER_NAME=backend-server-2
+      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
+      - BACKEND_NAME=api-backend
+      - GATEWAY_URL=http://gateway:9090
       - ENABLE_HTTP2=true
     networks:
       - gateway-net
+    depends_on:
+      - gateway
     restart: unless-stopped
 
   backend-server-3:
@@ -72,10 +78,15 @@ services:
     container_name: backend-server-3
     environment:
       - SERVER_NAME=backend-server-3
+      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
+      - BACKEND_NAME=api-backend
+      - GATEWAY_URL=http://gateway:9090
       - ENABLE_HTTP2=true
     networks:
       - gateway-net
+    depends_on:
+      - gateway
     restart: unless-stopped
 
   # Web Backend Servers
@@ -86,10 +97,15 @@ services:
     container_name: web-server-1
     environment:
       - SERVER_NAME=web-server-1
+      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
+      - BACKEND_NAME=web-backend
+      - GATEWAY_URL=http://gateway:9090
       - ENABLE_HTTP2=true
     networks:
       - gateway-net
+    depends_on:
+      - gateway
     restart: unless-stopped
 
   web-server-2:
@@ -99,10 +115,15 @@ services:
     container_name: web-server-2
     environment:
       - SERVER_NAME=web-server-2
+      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
+      - BACKEND_NAME=web-backend
+      - GATEWAY_URL=http://gateway:9090
       - ENABLE_HTTP2=true
     networks:
       - gateway-net
+    depends_on:
+      - gateway
     restart: unless-stopped
 
   # Test Client (for running tests)

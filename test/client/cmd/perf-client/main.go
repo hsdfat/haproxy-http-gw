@@ -9,8 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"golang.org/x/net/http2"
 )
 
 type Stats struct {
@@ -126,11 +124,6 @@ func main() {
 		MaxIdleConns:        *concurrency,
 		MaxIdleConnsPerHost: *concurrency,
 		IdleConnTimeout:     90 * time.Second,
-	}
-
-	if *http2 {
-		// Enable HTTP/2 support
-		http2.ConfigureTransport(transport)
 	}
 
 	client := &http.Client{

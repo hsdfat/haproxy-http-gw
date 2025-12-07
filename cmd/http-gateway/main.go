@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/haproxytech/kubernetes-ingress/pkg/gateway"
 	"github.com/haproxytech/kubernetes-ingress/pkg/gateway/examples"
 	"github.com/haproxytech/kubernetes-ingress/pkg/haproxy/api"
+	"github.com/haproxytech/kubernetes-ingress/pkg/haproxy/instance"
 	"github.com/haproxytech/kubernetes-ingress/pkg/utils"
 )
 
@@ -56,42 +58,102 @@ func main() {
 	runSimpleProviderExample(haproxyClient)
 }
 
+// monitorHAProxyReload monitors the reload flag and triggers HAProxy reload when needed
+func monitorHAProxyReload(ctx context.Context, logger utils.Logger) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if instance.NeedReload() {
+				logger.Info("Reloading HAProxy due to backend update...")
+				if err := reloadHAProxy(logger); err != nil {
+					logger.Errorf("Failed to reload HAProxy: %v", err)
+				} else {
+					logger.Info("HAProxy reloaded successfully")
+					instance.Reset()
+				}
+			}
+		}
+	}
+}
+
+// reloadHAProxy performs a graceful reload of HAProxy using SIGUSR2 signal
+func reloadHAProxy(logger utils.Logger) error {
+	// Get HAProxy binary path from environment or use default
+	haproxyBin := os.Getenv("HAPROXY_BIN")
+	if haproxyBin == "" {
+		haproxyBin = "/usr/local/sbin/haproxy"
+	}
+
+	configFile := os.Getenv("HAPROXY_CONFIG")
+	if configFile == "" {
+		configFile = "/etc/haproxy/haproxy.cfg"
+	}
+
+	// First, validate the configuration
+	validateCmd := exec.Command(haproxyBin, "-c", "-f", configFile)
+	if output, err := validateCmd.CombinedOutput(); err != nil {
+		logger.Errorf("HAProxy config validation failed: %s", string(output))
+		return err
+	}
+
+	logger.Debug("HAProxy configuration validated successfully")
+
+	// Get the PID of the current HAProxy master process
+	pidFile := os.Getenv("HAPROXY_PID_FILE")
+	if pidFile == "" {
+		pidFile = "/tmp/haproxy-gateway/haproxy.pid"
+	}
+
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		logger.Warningf("Could not read PID file %s: %v", pidFile, err)
+		return err
+	}
+
+	// Parse PID and trim whitespace
+	pidStr := string(pidData)
+	pidStr = string([]rune(pidStr)[:len(pidStr)-1])
+
+	logger.Debugf("Sending SIGUSR2 to HAProxy master process (PID: %s) for reload", pidStr)
+
+	// Send SIGUSR2 to HAProxy master process for graceful reload
+	// In master-worker mode, SIGUSR2 triggers a reload
+	killCmd := exec.Command("kill", "-USR2", pidStr)
+	if output, err := killCmd.CombinedOutput(); err != nil {
+		logger.Errorf("Failed to send reload signal to HAProxy: %s", string(output))
+		return err
+	}
+
+	logger.Debug("Reload signal sent successfully to HAProxy master process")
+	return nil
+}
+
 // Example 1: Simple Provider
 func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 	logger := utils.GetLogger()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create a simple provider
+	// Create a simple provider (backends will be registered via API)
 	provider := examples.NewSimpleProvider()
 
-	// Add some backends manually (using actual test environment servers)
-	provider.AddBackend(gateway.Backend{
-		Name: "api-backend",
-		Servers: []gateway.BackendServer{
-			{Name: "backend-server-1", IP: "backend-server-1", Port: 9000},
-			{Name: "backend-server-2", IP: "backend-server-2", Port: 9000},
-			{Name: "backend-server-3", IP: "backend-server-3", Port: 9000},
-		},
-	})
-
-	provider.AddBackend(gateway.Backend{
-		Name: "web-backend",
-		Servers: []gateway.BackendServer{
-			{Name: "web-server-1", IP: "web-server-1", Port: 9000},
-			{Name: "web-server-2", IP: "web-server-2", Port: 9000},
-		},
-	})
-
 	// Create backend manager
+	// Note: SyncPeriod is set to 5 minutes to avoid frequent reloads
+	// that would wipe out dynamically added routes
 	manager := gateway.NewManager(gateway.ManagerConfig{
 		HAProxyClient: haproxyClient,
 		Provider:      provider,
-		SyncPeriod:    5 * time.Second,
+		SyncPeriod:    5 * time.Minute, // Reduced frequency to preserve routes
 		EventChanSize: 100,
 	})
 
 	// Create HTTP gateway with HTTP/2 support
+	// Frontend is statically configured in haproxy-init.cfg
 	// For test environment: HTTPS disabled to avoid cert validation errors
 	gw := gateway.NewHTTPGateway(haproxyClient, manager, gateway.GatewayConfig{
 		FrontendName: "http-gateway",
@@ -104,8 +166,8 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 		DefaultBackend: "api-backend",
 	})
 
-	// Start the gateway
-	if err := gw.Start(ctx); err != nil {
+	// Start the gateway (backend manager only, frontend is pre-configured)
+	if err := gw.StartWithoutFrontend(ctx); err != nil {
 			logger.Error(err)
 		os.Exit(1)
 	}
@@ -118,9 +180,23 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 		}
 	}()
 
+	// Start HAProxy reload monitor
+	go monitorHAProxyReload(ctx, logger)
+
 	logger.Info("Gateway is running and ready to accept configuration")
 	logger.Info("API server listening on :9090")
-	logger.Info("Use POST /api/routes to add routing rules")
+	logger.Info("")
+	logger.Info("Backend Registration API:")
+	logger.Info("  POST /api/backends - Register a backend")
+	logger.Info("  GET  /api/backends - List all backends")
+	logger.Info("  DELETE /api/backends/{name} - Unregister a backend")
+	logger.Info("")
+	logger.Info("Example backend registration:")
+	logger.Info("  curl -X POST http://localhost:9090/api/backends -H 'Content-Type: application/json' -d '{\"name\":\"api-backend\",\"servers\":[{\"name\":\"server1\",\"ip\":\"192.168.1.10\",\"port\":9000}]}'")
+	logger.Info("")
+	logger.Info("Route Configuration API:")
+	logger.Info("  POST /api/routes - Add a routing rule")
+	logger.Info("  GET  /api/routes - List all routes")
 	logger.Info("Example: curl -X POST http://localhost:9090/api/routes -d '{\"host\":\"api.example.com\",\"path\":\"/api\",\"backend\":\"api-backend\"}'")
 
 	// Wait for shutdown signal
@@ -163,10 +239,12 @@ func runPollingProviderExample(haproxyClient api.HAProxyClient) {
 	})
 
 	// Create backend manager
+	// Note: SyncPeriod is set to 5 minutes to avoid frequent reloads
+	// that would wipe out dynamically added routes
 	manager := gateway.NewManager(gateway.ManagerConfig{
 		HAProxyClient: haproxyClient,
 		Provider:      provider,
-		SyncPeriod:    5 * time.Second,
+		SyncPeriod:    5 * time.Minute, // Reduced frequency to preserve routes
 		EventChanSize: 100,
 	})
 
