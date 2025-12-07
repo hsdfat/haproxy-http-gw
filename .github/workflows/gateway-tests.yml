@@ -31,6 +31,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
       - name: Install dependencies
         run: |
           # Install required tools
@@ -146,6 +151,12 @@ jobs:
           echo "✓ api-backend is registered"
           echo "✓ web-backend is registered"
 
+      - name: Configure routes
+        run: |
+          cd test
+          chmod +x scripts/configure-routes.sh
+          ./scripts/configure-routes.sh
+
       - name: View service logs (pre-test)
         if: always()
         run: |
@@ -160,10 +171,9 @@ jobs:
         id: functional-tests
         run: |
           cd test
-          echo "Running functional tests..."
-          podman-compose run --rm test-client /test-client \
-            -gateway=http://gateway:8080 \
-            -gateway-https=https://gateway:8443 \
+          echo "Running functional tests (including H2C support)..."
+          go run ./client/cmd/test-client/main.go \
+            -gateway=http://localhost:8080 \
             -verbose > functional-results.txt 2>&1
 
           cat functional-results.txt
@@ -183,8 +193,8 @@ jobs:
         run: |
           cd test
           echo "Running low concurrency performance test..."
-          podman-compose run --rm test-client /perf-client \
-            -url=http://gateway:8080 \
+          go run ./client/cmd/perf-client/main.go \
+            -url=http://localhost:8080 \
             -c=10 \
             -n=1000 > perf-low-results.txt 2>&1
 
@@ -218,8 +228,8 @@ jobs:
         run: |
           cd test
           echo "Running medium concurrency performance test..."
-          podman-compose run --rm test-client /perf-client \
-            -url=http://gateway:8080 \
+          go run ./client/cmd/perf-client/main.go \
+            -url=http://localhost:8080 \
             -c=50 \
             -n=5000 > perf-medium-results.txt 2>&1
 
@@ -248,13 +258,13 @@ jobs:
             exit 1
           fi
 
-      - name: Run HTTP/2 performance test
+      - name: Run HTTP/2 performance test (H2C)
         id: perf-test-http2
         run: |
           cd test
-          echo "Running HTTP/2 performance test..."
-          podman-compose run --rm test-client /perf-client \
-            -url=http://gateway:8080 \
+          echo "Running HTTP/2 performance test (H2C - HTTP/2 over cleartext)..."
+          go run ./client/cmd/perf-client/main.go \
+            -url=http://localhost:8080 \
             -http2 \
             -c=50 \
             -n=5000 > perf-http2-results.txt 2>&1
@@ -408,11 +418,11 @@ jobs:
             echo "| Performance (Medium) | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
           fi
 
-          # Performance test - HTTP/2
+          # Performance test - HTTP/2 (H2C)
           if [ "${{ steps.perf-test-http2.outputs.perf_http2_passed }}" == "true" ]; then
-            echo "| HTTP/2 Performance | ✅ PASS | RPS: ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| HTTP/2 Performance (H2C) | ✅ PASS | RPS: ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| HTTP/2 Performance | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
+            echo "| HTTP/2 Performance (H2C) | ❌ FAIL | Failed |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # Dynamic backend test
@@ -429,7 +439,7 @@ jobs:
           echo "|--------------|--------------|" >> $GITHUB_STEP_SUMMARY
           echo "| 10 workers, HTTP/1.1 | ${{ steps.perf-test-low.outputs.perf_low_rps }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 50 workers, HTTP/1.1 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 50 workers, HTTP/2 | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 50 workers, HTTP/2 (H2C) | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |" >> $GITHUB_STEP_SUMMARY
 
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && always()
@@ -459,7 +469,7 @@ jobs:
             | Functional Tests | ${functionalPassed ? '✅' : '❌'} |
             | Performance (10 workers) | ${perfLowPassed ? '✅' : '❌'} |
             | Performance (50 workers) | ${perfMediumPassed ? '✅' : '❌'} |
-            | HTTP/2 Performance | ${perfHttp2Passed ? '✅' : '❌'} |
+            | HTTP/2 Performance (H2C) | ${perfHttp2Passed ? '✅' : '❌'} |
             | Dynamic Backend Updates | ${dynamicPassed ? '✅' : '❌'} |
 
             ### Performance Metrics
@@ -468,7 +478,7 @@ jobs:
             |--------------|--------------|
             | 10 workers, HTTP/1.1 | ${{ steps.perf-test-low.outputs.perf_low_rps }} |
             | 50 workers, HTTP/1.1 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |
-            | 50 workers, HTTP/2 | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |
+            | 50 workers, HTTP/2 (H2C) | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |
 
             <details>
             <summary>View detailed test results</summary>
