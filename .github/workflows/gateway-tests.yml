@@ -188,13 +188,14 @@ jobs:
             exit 1
           fi
 
-      - name: Run performance tests - Low concurrency
+      - name: Run HTTP/2 (H2C) performance test - Low concurrency
         id: perf-test-low
         run: |
           cd test
-          echo "Running low concurrency performance test..."
+          echo "Running HTTP/2 (H2C) low concurrency performance test..."
           go run ./client/cmd/perf-client/main.go \
             -url=http://localhost:8080 \
+            -http2 \
             -c=8 \
             -n=1000 > perf-low-results.txt 2>&1
 
@@ -210,11 +211,11 @@ jobs:
 
             # Validate success rate >= 99%
             if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
-              echo "✓ Performance test passed (success rate: ${SUCCESS_RATE}%)"
+              echo "✓ HTTP/2 (H2C) performance test passed (success rate: ${SUCCESS_RATE}%)"
               echo "perf_low_passed=true" >> $GITHUB_OUTPUT
               echo "perf_low_rps=${RPS}" >> $GITHUB_OUTPUT
             else
-              echo "✗ Performance test failed (success rate: ${SUCCESS_RATE}% < 99%)"
+              echo "✗ HTTP/2 (H2C) performance test failed (success rate: ${SUCCESS_RATE}% < 99%)"
               echo "perf_low_passed=false" >> $GITHUB_OUTPUT
               exit 1
             fi
@@ -223,13 +224,14 @@ jobs:
             exit 1
           fi
 
-      - name: Run performance tests - Medium concurrency
+      - name: Run HTTP/2 (H2C) performance test - Medium concurrency
         id: perf-test-medium
         run: |
           cd test
-          echo "Running medium concurrency performance test..."
+          echo "Running HTTP/2 (H2C) medium concurrency performance test..."
           go run ./client/cmd/perf-client/main.go \
             -url=http://localhost:8080 \
+            -http2 \
             -c=16 \
             -n=20000 > perf-medium-results.txt 2>&1
 
@@ -245,11 +247,11 @@ jobs:
 
             # Validate success rate >= 98%
             if (( $(echo "$SUCCESS_RATE >= 98.0" | bc -l) )); then
-              echo "✓ Performance test passed (success rate: ${SUCCESS_RATE}%)"
+              echo "✓ HTTP/2 (H2C) performance test passed (success rate: ${SUCCESS_RATE}%)"
               echo "perf_medium_passed=true" >> $GITHUB_OUTPUT
               echo "perf_medium_rps=${RPS}" >> $GITHUB_OUTPUT
             else
-              echo "✗ Performance test failed (success rate: ${SUCCESS_RATE}% < 98%)"
+              echo "✗ HTTP/2 (H2C) performance test failed (success rate: ${SUCCESS_RATE}% < 98%)"
               echo "perf_medium_passed=false" >> $GITHUB_OUTPUT
               exit 1
             fi
@@ -258,11 +260,11 @@ jobs:
             exit 1
           fi
 
-      - name: Run HTTP/2 performance test (H2C)
+      - name: Run HTTP/2 (H2C) performance test - High concurrency
         id: perf-test-http2
         run: |
           cd test
-          echo "Running HTTP/2 performance test (H2C - HTTP/2 over cleartext)..."
+          echo "Running HTTP/2 (H2C) high concurrency performance test..."
           go run ./client/cmd/perf-client/main.go \
             -url=http://localhost:8080 \
             -http2 \
@@ -281,11 +283,11 @@ jobs:
 
             # Validate success rate >= 98%
             if (( $(echo "$SUCCESS_RATE >= 98.0" | bc -l) )); then
-              echo "✓ HTTP/2 performance test passed (success rate: ${SUCCESS_RATE}%)"
+              echo "✓ HTTP/2 (H2C) performance test passed (success rate: ${SUCCESS_RATE}%)"
               echo "perf_http2_passed=true" >> $GITHUB_OUTPUT
               echo "perf_http2_rps=${RPS}" >> $GITHUB_OUTPUT
             else
-              echo "✗ HTTP/2 performance test failed (success rate: ${SUCCESS_RATE}% < 98%)"
+              echo "✗ HTTP/2 (H2C) performance test failed (success rate: ${SUCCESS_RATE}% < 98%)"
               echo "perf_http2_passed=false" >> $GITHUB_OUTPUT
               exit 1
             fi
@@ -423,25 +425,25 @@ jobs:
             echo "| **Functional Tests** | ❌ FAIL | Some tests failed - check artifacts |" >> $GITHUB_STEP_SUMMARY
           fi
 
-          # Performance test - low
+          # HTTP/2 (H2C) Performance test - low
           if [ "${{ steps.perf-test-low.outputs.perf_low_passed }}" == "true" ]; then
-            echo "| **Performance (Low)** | ✅ PASS | 8 workers, 1,000 requests |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - Low** | ✅ PASS | 8 workers, 1,000 requests |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| **Performance (Low)** | ❌ FAIL | Success rate < 99% |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - Low** | ❌ FAIL | Success rate < 99% |" >> $GITHUB_STEP_SUMMARY
           fi
 
-          # Performance test - medium
+          # HTTP/2 (H2C) Performance test - medium
           if [ "${{ steps.perf-test-medium.outputs.perf_medium_passed }}" == "true" ]; then
-            echo "| **Performance (Medium)** | ✅ PASS | 16 workers, 20,000 requests |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - Medium** | ✅ PASS | 16 workers, 20,000 requests |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| **Performance (Medium)** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - Medium** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
           fi
 
-          # Performance test - HTTP/2 (H2C)
+          # HTTP/2 (H2C) Performance test - high
           if [ "${{ steps.perf-test-http2.outputs.perf_http2_passed }}" == "true" ]; then
-            echo "| **HTTP/2 (H2C)** | ✅ PASS | 32 workers, 100,000 requests |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - High** | ✅ PASS | 32 workers, 100,000 requests |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| **HTTP/2 (H2C)** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - High** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # Dynamic backend test
@@ -452,34 +454,37 @@ jobs:
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 🚀 Performance Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 HTTP/2 (H2C) Performance Metrics" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Configuration | Concurrency | Total Requests | Requests/sec | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------------|:-----------:|:--------------:|:------------:|:------:|" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Level | Concurrency | Total Requests | Requests/sec | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|:-----------:|:--------------:|:------------:|:------:|" >> $GITHUB_STEP_SUMMARY
 
           # Low concurrency
           RPS_LOW="${{ steps.perf-test-low.outputs.perf_low_rps }}"
           if [ -n "$RPS_LOW" ]; then
-            echo "| HTTP/1.1 (Low) | 8 | 1,000 | **${RPS_LOW}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low | 8 | 1,000 | **${RPS_LOW}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| HTTP/1.1 (Low) | 8 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low | 8 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # Medium concurrency
           RPS_MED="${{ steps.perf-test-medium.outputs.perf_medium_rps }}"
           if [ -n "$RPS_MED" ]; then
-            echo "| HTTP/1.1 (Medium) | 16 | 20,000 | **${RPS_MED}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Medium | 16 | 20,000 | **${RPS_MED}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| HTTP/1.1 (Medium) | 16 | 20,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Medium | 16 | 20,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
-          # HTTP/2
+          # High concurrency
           RPS_HTTP2="${{ steps.perf-test-http2.outputs.perf_http2_rps }}"
           if [ -n "$RPS_HTTP2" ]; then
-            echo "| HTTP/2 (H2C) | 32 | 100,000 | **${RPS_HTTP2}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| High | 32 | 100,000 | **${RPS_HTTP2}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| HTTP/2 (H2C) | 32 | 100,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| High | 32 | 100,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> **Note:** All performance tests use HTTP/2 over cleartext (H2C) protocol." >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 📦 Test Artifacts" >> $GITHUB_STEP_SUMMARY
@@ -525,23 +530,29 @@ jobs:
             | Test | Result |
             |------|--------|
             | Functional Tests | ${functionalPassed ? '✅' : '❌'} |
-            | Performance (10 workers) | ${perfLowPassed ? '✅' : '❌'} |
-            | Performance (50 workers) | ${perfMediumPassed ? '✅' : '❌'} |
-            | HTTP/2 Performance (H2C) | ${perfHttp2Passed ? '✅' : '❌'} |
+            | HTTP/2 (H2C) - Low (8 workers) | ${perfLowPassed ? '✅' : '❌'} |
+            | HTTP/2 (H2C) - Medium (16 workers) | ${perfMediumPassed ? '✅' : '❌'} |
+            | HTTP/2 (H2C) - High (32 workers) | ${perfHttp2Passed ? '✅' : '❌'} |
             | Dynamic Backend Updates | ${dynamicPassed ? '✅' : '❌'} |
 
-            ### Performance Metrics
+            ### HTTP/2 (H2C) Performance Metrics
 
-            | Configuration | Requests/sec |
-            |--------------|--------------|
-            | 10 workers, HTTP/1.1 | ${{ steps.perf-test-low.outputs.perf_low_rps }} |
-            | 50 workers, HTTP/1.1 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |
-            | 50 workers, HTTP/2 (H2C) | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |
+            | Test Level | Concurrency | Total Requests | Requests/sec |
+            |-----------|:-----------:|:--------------:|:------------:|
+            | Low | 8 | 1,000 | ${{ steps.perf-test-low.outputs.perf_low_rps }} |
+            | Medium | 16 | 20,000 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |
+            | High | 32 | 100,000 | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |
+
+            > **Note:** All performance tests use HTTP/2 over cleartext (H2C) protocol.
 
             <details>
             <summary>View detailed test results</summary>
 
-            Test artifacts are available in the workflow run.
+            Test artifacts are available in the workflow run:
+            - \`functional-results.txt\`
+            - \`perf-low-results.txt\`
+            - \`perf-medium-results.txt\`
+            - \`perf-http2-results.txt\`
 
             </details>
             `;
