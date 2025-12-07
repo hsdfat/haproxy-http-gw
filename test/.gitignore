@@ -8,3 +8,19 @@ certs/*.ext
 
 # Keep directory
 !certs/.gitkeep
+
+# Generated test results
+*-results.txt
+functional-results.txt
+perf-results.txt
+
+# Compiled binaries
+main
+client/http2-client
+*.exe
+*.out
+
+# Test output files
+*.log
+test-output/
+results/

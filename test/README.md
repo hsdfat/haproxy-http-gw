@@ -1,587 +1,442 @@
 # HTTP Gateway Test System
 
-Complete test system for the HTTP/2 Gateway with functional and performance testing capabilities.
-
-## Overview
-
-This test system provides:
-
-1. **Docker Compose Environment** - Complete local test infrastructure
-2. **Mock Backend Servers** - HTTP/2-enabled backend services
-3. **Backend API Provider** - REST API for dynamic backend discovery
-4. **Functional Test Client** - Automated functional tests
-5. **Performance Test Client** - Load and performance testing
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Test Environment                         │
-│                                                              │
-│  ┌────────────┐      ┌─────────────────────────────────┐   │
-│  │   Test     │      │      HTTP Gateway               │   │
-│  │  Client    │─────→│  (HAProxy + Gateway Controller) │   │
-│  └────────────┘      └──────────┬──────────────────────┘   │
-│                                  │                           │
-│                                  ↓                           │
-│                      ┌───────────────────────┐              │
-│                      │   Backend API         │              │
-│                      │  (REST Provider)      │              │
-│                      └───────────────────────┘              │
-│                                  │                           │
-│                                  ↓                           │
-│              ┌──────────────────────────────────┐           │
-│              │      Backend Servers             │           │
-│              │  • backend-server-1 (HTTP/2)     │           │
-│              │  • backend-server-2 (HTTP/2)     │           │
-│              │  • backend-server-3 (HTTP/2)     │           │
-│              │  • web-server-1 (HTTP/2)         │           │
-│              │  • web-server-2 (HTTP/2)         │           │
-│              └──────────────────────────────────┘           │
-└──────────────────────────────────────────────────────────────┘
-```
+Complete test infrastructure for the HAProxy HTTP/HTTP2 Gateway with automated testing, performance benchmarking, and dynamic backend management.
 
 ## Quick Start
 
 ### Prerequisites
 
-**Option 1: Using Podman (Recommended)**
-- Podman
-- podman-compose (install with `pip install podman-compose`)
-- OpenSSL (for certificate generation)
+- Docker/Podman with compose
+- 8GB+ RAM available
+- Ports 8000, 8080, 8443, 9090 available
 
-**Option 2: Using Docker**
-- Docker
-- Docker Compose
-- OpenSSL (for certificate generation)
-
-### Setup
-
-1. **Generate SSL Certificates**
+### 5-Minute Setup
 
 ```bash
 cd test
-./scripts/generate-certs.sh
-```
-
-2. **Start the Test Environment**
-
-**Using Podman (Default):**
-```bash
-podman-compose up -d
-# OR using make
-make up
-```
-
-**Using Docker:**
-```bash
-docker-compose up -d
-# OR using make
-make CONTAINER_RUNTIME=docker up
-```
-
-3. **Verify Services are Running**
-
-**Using Podman:**
-```bash
-podman-compose ps
-# OR using make
-make CONTAINER_RUNTIME=podman ps
-```
-
-**Using Docker:**
-```bash
-docker-compose ps
+make setup  # Generate certs, build images, start services
+make test   # Run all tests
 ```
 
 Expected output:
 ```
-NAME                 STATUS              PORTS
-backend-api          Up                  0.0.0.0:8000->8000/tcp
-backend-server-1     Up
-backend-server-2     Up
-backend-server-3     Up
-web-server-1         Up
-web-server-2         Up
-http-gateway         Up                  0.0.0.0:8080->8080/tcp, 0.0.0.0:8443->8443/tcp
-```
-
-### Running Tests
-
-#### Option 1: Using Make (Recommended - Works with both Podman and Docker)
-
-```bash
-# Run all tests (uses podman by default)
-make test
-
-# Run functional tests only
-make test-functional
-
-# Run performance tests only
-make test-perf
-
-# Quick smoke test
-make test-quick
-
-# Use Docker instead of Podman
-make CONTAINER_RUNTIME=docker test
-```
-
-#### Option 2: Run All Tests in Container
-
-**Using Podman:**
-```bash
-podman-compose run --rm test-client /usr/local/bin/run-tests.sh
-```
-
-**Using Docker:**
-```bash
-docker-compose run --rm test-client /usr/local/bin/run-tests.sh
-```
-
-#### Option 3: Run Individual Tests
-
-**Functional Tests:**
-
-*Using Podman:*
-```bash
-podman-compose run --rm test-client /test-client -gateway=http://gateway:8080 -verbose
-```
-
-*Using Docker:*
-```bash
-docker-compose run --rm test-client /test-client -gateway=http://gateway:8080 -verbose
-```
-
-**Performance Tests:**
-
-*Using Podman:*
-```bash
-# Quick test (10 workers, 1000 requests)
-podman-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=10 -n=1000
-
-# Load test (100 workers, 10000 requests)
-podman-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=100 -n=10000
-
-# Duration-based test (20 workers, 30 seconds)
-podman-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=20 -d=30s
-```
-
-*Using Docker:*
-```bash
-# Quick test (10 workers, 1000 requests)
-docker-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=10 -n=1000
-
-# Load test (100 workers, 10000 requests)
-docker-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=100 -n=10000
-
-# Duration-based test (20 workers, 30 seconds)
-docker-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=20 -d=30s
+✓ Functional Tests: PASS (6/6)
+✓ Performance Tests: PASS (>99% success rate)
+✓ All systems operational
 ```
 
 ### Manual Testing
 
-Test from your local machine:
-
 ```bash
-# HTTP request
+# Basic HTTP request
 curl -H "Host: api.example.com" http://localhost:8080/api/test
 
-# HTTPS request (HTTP/2)
+# HTTP/2 request
 curl -k --http2 -H "Host: api.example.com" https://localhost:8443/api/test
 
-# Check HTTP/2 protocol
-curl -k --http2 -v https://localhost:8443/api/test 2>&1 | grep "HTTP/2"
-
-# Test load balancing (multiple requests)
+# Test load balancing
 for i in {1..10}; do
-  curl -s -H "Host: api.example.com" http://localhost:8080/api/test | jq -r '.server'
+  curl -s http://localhost:8080/ | jq -r '.server'
 done
 ```
 
+## Architecture
+
+```
+┌─────────────┐
+│Test Client  │
+└──────┬──────┘
+       │
+       ↓
+┌──────────────────┐         ┌─────────────────┐
+│  HTTP Gateway    │ ← REST ←│  Backend API    │
+│  :8080 :8443     │   API   │  :8000          │
+└────────┬─────────┘         └─────────────────┘
+         │
+         ├─→ backend-server-1 (api-backend)
+         ├─→ backend-server-2 (api-backend)
+         ├─→ backend-server-3 (api-backend)
+         ├─→ web-server-1 (web-backend)
+         └─→ web-server-2 (web-backend)
+```
+
+**Features:**
+- **HTTP/HTTP2 Gateway** - HAProxy with HTTP/1.1 and HTTP/2 (H2C) support
+- **Backend API** - REST API for dynamic backend discovery
+- **Mock Backends** - HTTP/2-enabled test servers with auto-registration
+- **Test Clients** - Functional and performance testing tools
+- **Auto-Registration** - Backends self-register using IP auto-detection
+
 ## Components
 
-### 1. HTTP Gateway (Port 8080, 8443)
+### 1. HTTP Gateway (Ports 8080, 8443, 9090)
 
-The main gateway service that:
-- Accepts HTTP/HTTPS requests
-- Routes based on Host header and path
-- Load balances across backend servers
-- Supports HTTP/2
+Main gateway service providing:
+- HTTP/1.1 and HTTP/2 protocol support
+- Path and host-based routing
+- Round-robin load balancing
+- Health monitoring
+- Admin API (port 9090)
 
 **Configuration:**
 - HTTP Port: 8080
 - HTTPS Port: 8443
-- Admin/Stats: 9090
-- Backend discovery: REST API (http://backend-api:8000)
+- Admin/API Port: 9090
+- Stats available at: http://localhost:9090/stats
 
 ### 2. Backend API (Port 8000)
 
-REST API service for dynamic backend discovery.
-
-**Endpoints:**
+REST API for dynamic backend management:
 
 ```bash
-# List all backends
-curl http://localhost:8000/backends
+# List backends
+curl http://localhost:8000/backends | jq
 
-# Get specific backend
-curl http://localhost:8000/backends/api-backend
-
-# Create/update backend
+# Register backend
 curl -X POST http://localhost:8000/backends -H "Content-Type: application/json" -d '{
   "name": "my-backend",
-  "servers": [
-    {"name": "srv1", "ip": "10.0.0.1", "port": 8080},
-    {"name": "srv2", "ip": "10.0.0.2", "port": 8080}
-  ]
+  "servers": [{"name": "srv1", "ip": "10.0.0.1", "port": 8080}]
 }'
 
 # Delete backend
 curl -X DELETE http://localhost:8000/backends/my-backend
 ```
 
-**Default Backends:**
-
-- `api-backend`: backend-server-1, backend-server-2
+Default backends:
+- `api-backend`: backend-server-1, backend-server-2, backend-server-3
 - `web-backend`: web-server-1, web-server-2
 
 ### 3. Backend Servers
 
-Mock HTTP/2-enabled backend servers that:
+Mock HTTP/2-enabled servers that:
+- Auto-detect their IP address from network interface
+- Self-register with gateway on startup
 - Echo request details (method, path, headers, protocol)
-- Identify themselves in responses
-- Support HTTP/2
+- Support both HTTP/1.1 and HTTP/2
 
-**Testing a backend directly:**
+**IP Auto-Detection:**
+Servers automatically detect their container IP using:
+1. `eth0` interface IP (primary method)
+2. `hostname -i` (fallback)
+3. Hostname (last resort)
+4. Explicit `SERVER_IP` env var (override)
 
-```bash
-docker exec backend-server-1 curl http://localhost:9000/test
-```
+See [Protocol & Features](FEATURES.md) for HTTP/2 details.
 
 ### 4. Test Clients
 
 #### Functional Test Client
+```bash
+docker-compose run --rm test-client /test-client -gateway=http://gateway:8080 -verbose
+```
 
-Automated tests covering:
+Tests:
 - Basic HTTP requests
 - HTTP/2 support
 - Load balancing
-- Path routing
-- Host-based routing
+- Path/host routing
 - Health checks
 
-**Usage:**
-
-```bash
-/test-client [options]
-
-Options:
-  -gateway string       Gateway HTTP URL (default: http://localhost:8080)
-  -gateway-https string Gateway HTTPS URL (default: https://localhost:8443)
-  -host string          Host header to use (default: api.example.com)
-  -verbose              Enable verbose output
-```
-
-**Example:**
-
-```bash
-docker-compose run --rm test-client /test-client \
-  -gateway=http://gateway:8080 \
-  -gateway-https=https://gateway:8443 \
-  -host=api.example.com \
-  -verbose
-```
-
 #### Performance Test Client
-
-Load testing tool with configurable concurrency and request counts.
-
-**Usage:**
-
 ```bash
-/perf-client [options]
+# 50 concurrent workers, 5000 requests
+docker-compose run --rm test-client /perf-client -url=http://gateway:8080 -c=50 -n=5000
 
-Options:
-  -url string     Gateway URL (default: http://localhost:8080)
-  -host string    Host header (default: api.example.com)
-  -path string    Request path (default: /api/test)
-  -c int          Concurrency (number of workers) (default: 10)
-  -n int          Total number of requests (default: 1000)
-  -d duration     Test duration (overrides -n)
-  -http2          Use HTTP/2
+# HTTP/2 performance
+docker-compose run --rm test-client /perf-client -url=https://gateway:8443 -http2 -c=50 -n=5000
 ```
 
-**Examples:**
+Metrics:
+- Requests per second (RPS)
+- Latency (min, max, avg, p50, p95, p99)
+- Success rate
+- Error distribution
+
+## Testing
+
+### Using Make Commands
 
 ```bash
-# Basic load test
-/perf-client -url=http://gateway:8080 -c=50 -n=10000
-
-# Duration-based test
-/perf-client -url=http://gateway:8080 -c=20 -d=1m
-
-# HTTP/2 performance test
-/perf-client -url=https://gateway:8443 -http2 -c=100 -n=50000
-
-# Specific path
-/perf-client -url=http://gateway:8080 -path=/api/users -c=30 -n=5000
+make setup          # First-time setup (certs, build, start)
+make test           # Run all tests
+make test-functional # Functional tests only
+make test-perf      # Performance tests only
+make test-quick     # Quick smoke test
+make logs           # View all logs
+make clean          # Stop and cleanup
+make reset          # Complete reset and rebuild
 ```
 
-**Output Metrics:**
-- Total requests
-- Success/failure rate
-- Requests per second
-- Latency statistics (min, max, average)
+### Local Testing (Mirrors GitHub Actions)
 
-## Test Scenarios
+Run the exact same tests as GitHub Actions CI/CD:
 
-### Scenario 1: Basic Functional Testing
-
-**Using Make (works with both Podman and Docker):**
 ```bash
-# Setup and start environment
-make setup
-
-# Run functional tests
-make test-functional
-
-# Check results
-# All tests should pass with ✓ PASS status
+cd test
+./run-github-action-tests.sh
 ```
 
-**Using Podman directly:**
+This runs:
+1. Functional tests (basic functionality)
+2. Performance test - Low concurrency (10 workers, 1000 requests)
+3. Performance test - Medium concurrency (50 workers, 5000 requests)
+4. HTTP/2 performance test (50 workers, 5000 requests)
+5. Dynamic backend tests (register/unregister)
+
+**Prerequisites:**
 ```bash
-# Start environment
-podman-compose up -d
+# macOS
+brew install jq bc podman
+pip3 install podman-compose
 
-# Run functional tests
-podman-compose run --rm test-client /test-client -verbose
-
-# Check results
-# All tests should pass with ✓ PASS status
+# Ubuntu/Debian
+sudo apt-get install jq bc
+pip3 install podman-compose
 ```
 
-**Using Docker directly:**
+See [Testing Guide](TESTING.md) for detailed testing instructions.
+
+## Development Workflow
+
+### 1. Start Services
+
 ```bash
-# Start environment
-docker-compose up -d
-
-# Run functional tests
-docker-compose run --rm test-client /test-client -verbose
-
-# Check results
-# All tests should pass with ✓ PASS status
+cd test
+podman-compose up -d  # or docker-compose
 ```
 
-### Scenario 2: Dynamic Backend Updates
+### 2. Verify Health
 
 ```bash
-# Add a new backend server
-curl -X POST http://localhost:8000/backends -H "Content-Type: application/json" -d '{
-  "name": "dynamic-backend",
-  "servers": [
-    {"name": "backend-server-3", "ip": "backend-server-3", "port": 9000}
-  ]
-}'
+# Gateway health
+curl http://localhost:9090/health
 
-# Verify backend was added
-curl http://localhost:8000/backends
-
-# The gateway should automatically pick up the new backend
-# Test requests will now be routed to the new backend
+# Registered backends
+curl http://localhost:9090/api/backends | jq
 ```
 
-### Scenario 3: Load Balancing Verification
+### 3. Configure Routes
 
 ```bash
-# Make multiple requests and check distribution
+./scripts/configure-routes.sh
+```
+
+Adds:
+- `api.example.com/api` → `api-backend`
+- `www.example.com/` → `web-backend`
+
+### 4. Manual Testing
+
+```bash
+# Test with host header
+curl -H "Host: api.example.com" http://localhost:8080/api/test
+
+# Load balancing verification
 for i in {1..20}; do
-  curl -s -H "Host: api.example.com" http://localhost:8080/api/test | jq -r '.server'
+  curl -s http://localhost:8080/ | jq -r '.server'
 done | sort | uniq -c
 
-# Expected output shows distribution across servers:
-#   10 backend-server-1
-#   10 backend-server-2
+# HTTP/2 test (H2C - cleartext)
+curl --http2-prior-knowledge http://localhost:8080/
+
+# HTTP/2 test (HTTPS)
+curl -k --http2 https://localhost:8443/
 ```
 
-### Scenario 4: HTTP/2 Performance Testing
+### 5. View Logs
 
-**Using Podman:**
 ```bash
-# Test HTTP/2 performance
-podman-compose run --rm test-client /perf-client \
-  -url=https://gateway:8443 \
-  -http2 \
-  -c=100 \
-  -n=50000
+# All logs
+podman-compose logs -f
 
-# Compare with HTTP/1.1
-podman-compose run --rm test-client /perf-client \
-  -url=http://gateway:8080 \
-  -c=100 \
-  -n=50000
-
-# HTTP/2 should show better throughput and lower latency
-```
-
-**Using Docker:**
-```bash
-# Test HTTP/2 performance
-docker-compose run --rm test-client /perf-client \
-  -url=https://gateway:8443 \
-  -http2 \
-  -c=100 \
-  -n=50000
-
-# Compare with HTTP/1.1
-docker-compose run --rm test-client /perf-client \
-  -url=http://gateway:8080 \
-  -c=100 \
-  -n=50000
-
-# HTTP/2 should show better throughput and lower latency
-```
-
-### Scenario 5: High Concurrency Testing
-
-**Using Podman:**
-```bash
-# Stress test with high concurrency
-podman-compose run --rm test-client /perf-client \
-  -url=http://gateway:8080 \
-  -c=200 \
-  -d=2m
-
-# Monitor gateway performance
-podman stats http-gateway
-```
-
-**Using Docker:**
-```bash
-# Stress test with high concurrency
-docker-compose run --rm test-client /perf-client \
-  -url=http://gateway:8080 \
-  -c=200 \
-  -d=2m
-
-# Monitor gateway performance
-docker stats http-gateway
-```
-
-## Monitoring and Debugging
-
-### View Gateway Logs
-
-**Using Make:**
-```bash
-make logs
-```
-
-**Using Podman:**
-```bash
+# Specific service
 podman-compose logs -f gateway
-```
-
-**Using Docker:**
-```bash
-docker-compose logs -f gateway
-```
-
-### View Backend API Logs
-
-**Using Podman:**
-```bash
+podman-compose logs -f backend-server-1
 podman-compose logs -f backend-api
 ```
 
-**Using Docker:**
+### 6. Debug HAProxy
+
 ```bash
-docker-compose logs -f backend-api
+# HAProxy stats
+echo "show stat" | podman exec -i http-gateway socat - /var/run/haproxy-runtime-api.sock
+
+# Backend status
+echo "show servers state" | podman exec -i http-gateway socat - /var/run/haproxy-runtime-api.sock
+
+# Current config
+echo "show config" | podman exec -i http-gateway socat - /var/run/haproxy-runtime-api.sock
 ```
 
-### View Backend Server Logs
+### 7. Cleanup
 
-**Using Podman:**
 ```bash
-podman-compose logs -f backend-server-1 backend-server-2 backend-server-3
+podman-compose down    # Stop services
+podman-compose down -v # Stop and remove volumes
 ```
 
-**Using Docker:**
+## Performance Benchmarks
+
+Expected performance on typical development hardware:
+
+| Environment | Concurrency | Requests | RPS | Avg Latency | Success Rate |
+|------------|-------------|----------|-----|-------------|--------------|
+| GitHub Actions | 10 | 1,000 | 800-1,000 | 10-20ms | >99% |
+| GitHub Actions | 50 | 5,000 | 2,000-3,000 | 20-50ms | >98% |
+| GitHub Actions HTTP/2 | 50 | 5,000 | 2,500-4,000 | 20-40ms | >98% |
+| MacBook Pro M1 | 50 | 5,000 | 4,000-6,000 | 10-25ms | >99% |
+| MacBook Pro M1 HTTP/2 | 50 | 5,000 | 5,000-8,000 | 8-20ms | >99% |
+
+**HTTP/2 Benefits:**
+- 15-30% higher throughput
+- 20-40% lower latency
+- Better connection multiplexing
+- Reduced overhead
+
+## Troubleshooting
+
+### Services Won't Start
+
 ```bash
-docker-compose logs -f backend-server-1 backend-server-2 backend-server-3
-```
+# Check Docker/Podman resources
+docker info  # or podman info
 
-### Check HAProxy Stats
+# View logs
+podman-compose logs
 
-**Using Podman:**
-```bash
-# Via runtime socket
-podman exec http-gateway sh -c "echo 'show stat' | socat - /var/run/haproxy-runtime-api.sock"
-
-# Check backends
-podman exec http-gateway sh -c "echo 'show backend' | socat - /var/run/haproxy-runtime-api.sock"
-
-# Check servers
-podman exec http-gateway sh -c "echo 'show servers state' | socat - /var/run/haproxy-runtime-api.sock"
-```
-
-**Using Docker:**
-```bash
-# Via runtime socket
-docker exec http-gateway sh -c "echo 'show stat' | socat - /var/run/haproxy-runtime-api.sock"
-
-# Check backends
-docker exec http-gateway sh -c "echo 'show backend' | socat - /var/run/haproxy-runtime-api.sock"
-
-# Check servers
-docker exec http-gateway sh -c "echo 'show servers state' | socat - /var/run/haproxy-runtime-api.sock"
-```
-
-### Access HAProxy Stats Page
-
-If stats are enabled, access at: http://localhost:9090/stats
-
-## Cleanup
-
-**Using Make (Recommended):**
-```bash
-# Stop services and remove volumes
-make clean
-
-# Complete cleanup and rebuild
+# Reset everything
 make reset
 ```
 
-**Using Podman:**
+### Tests Fail
+
 ```bash
-# Stop all services
-podman-compose down
+# Verify services are healthy
+podman-compose ps
 
-# Remove volumes
-podman-compose down -v
+# Wait longer for startup
+sleep 30 && make test
 
-# Clean up everything including images
-podman-compose down -v --rmi all
+# Check gateway health
+curl http://localhost:9090/health
+
+# View gateway logs
+podman-compose logs gateway
 ```
 
-**Using Docker:**
+### Backends Not Registered
+
 ```bash
-# Stop all services
-docker-compose down
+# Check backend logs
+podman-compose logs backend-server-1
 
-# Remove volumes
-docker-compose down -v
+# View registered backends
+curl http://localhost:9090/api/backends | jq
 
-# Clean up everything including images
-docker-compose down -v --rmi all
+# Manually register
+curl -X POST http://localhost:9090/api/backends \
+  -H "Content-Type: application/json" \
+  -d '{"name": "api-backend", "servers": [{"name": "srv1", "ip": "backend-server-1", "port": 9000}]}'
+
+# Restart backends
+podman-compose restart backend-server-1 backend-server-2 backend-server-3
+```
+
+### Port Conflicts
+
+```bash
+# Check what's using ports
+lsof -i :8080
+lsof -i :8443
+lsof -i :9090
+lsof -i :8000
+
+# Change ports in docker-compose.yml or stop conflicting services
+```
+
+### Load Balancing Not Working
+
+```bash
+# Test distribution
+for i in {1..20}; do curl -s http://localhost:8080/ | jq -r '.server'; done | sort | uniq -c
+
+# Should show even distribution:
+#   10 backend-server-1
+#   10 backend-server-2
+
+# Check backend count
+curl http://localhost:9090/api/backends | jq '.backends["api-backend"].Servers | length'
+```
+
+### HTTP/2 Not Working
+
+```bash
+# Check curl HTTP/2 support
+curl --version | grep HTTP2
+
+# Test H2C (HTTP/2 cleartext)
+curl --http2-prior-knowledge -v http://localhost:8080/
+
+# Test HTTPS HTTP/2
+curl -k --http2 -v https://localhost:8443/ 2>&1 | grep "HTTP/2"
+
+# View backend logs for protocol
+curl -s http://localhost:8080/ | jq '.protocol'
+# Should show "HTTP/2.0" or "HTTP/1.1"
+```
+
+### Performance Issues
+
+```bash
+# Check system resources
+top
+docker stats  # or podman stats
+
+# Reduce concurrency
+docker-compose run --rm test-client /perf-client -c=5 -n=100
+
+# Monitor gateway
+podman stats http-gateway
+```
+
+## CI/CD Integration
+
+### GitHub Actions
+
+The `.github/workflows/gateway-tests.yml` workflow runs automatically on:
+- Push to `master`, `main`, or `develop`
+- Pull requests
+- Manual trigger
+
+**Test Phases:**
+1. Build and start services
+2. Health verification
+3. Functional tests (6 tests)
+4. Performance tests (3 variants)
+5. Dynamic backend tests
+6. Generate test summary
+
+**Artifacts:**
+- `functional-results.txt`
+- `perf-low-results.txt`
+- `perf-medium-results.txt`
+- `perf-http2-results.txt`
+
+### Running Locally Before Push
+
+```bash
+# Run exact GitHub Actions tests
+cd test
+./run-github-action-tests.sh
+
+# Fix any failures before pushing
 ```
 
 ## Customization
 
-### Adding More Backend Servers
+### Add More Backend Servers
 
-Edit [docker-compose.yml](docker-compose.yml) and add:
+Edit `docker-compose.yml`:
 
 ```yaml
 backend-server-4:
@@ -592,190 +447,144 @@ backend-server-4:
   environment:
     - SERVER_NAME=backend-server-4
     - SERVER_PORT=9000
+    - BACKEND_NAME=api-backend
+    - GATEWAY_URL=http://gateway:9090
     - ENABLE_HTTP2=true
   networks:
     - gateway-net
 ```
 
-Then update the backend via API:
-
+Then restart:
 ```bash
-curl -X POST http://localhost:8000/backends -H "Content-Type: application/json" -d '{
-  "name": "api-backend",
-  "servers": [
-    {"name": "backend-server-1", "ip": "backend-server-1", "port": 9000},
-    {"name": "backend-server-2", "ip": "backend-server-2", "port": 9000},
-    {"name": "backend-server-4", "ip": "backend-server-4", "port": 9000}
-  ]
-}'
+podman-compose up -d backend-server-4
 ```
 
-### Configuring Gateway Settings
+The server will auto-register with the gateway.
 
-Edit environment variables in [docker-compose.yml](docker-compose.yml):
+### Configure Gateway Settings
+
+Edit `docker-compose.yml` gateway environment:
 
 ```yaml
 gateway:
   environment:
-    - LOG_LEVEL=debug          # trace, debug, info, warning, error
+    - LOG_LEVEL=debug           # trace, debug, info, warning, error
     - BACKEND_API_URL=http://backend-api:8000
-    - SYNC_PERIOD=5s           # Backend sync period
+    - SYNC_PERIOD=5s            # Backend sync period
 ```
 
-## Troubleshooting
+### Modify Test Scenarios
 
-### Gateway fails to start
+Edit test client code:
+- **Functional tests:** `test/client/cmd/test-client/main.go`
+- **Performance tests:** `test/client/cmd/perf-client/main.go`
 
-**Using Podman:**
+Rebuild:
 ```bash
-# Check logs
-podman-compose logs gateway
-
-# Verify HAProxy is running
-podman exec http-gateway ps aux | grep haproxy
-
-# Check runtime socket
-podman exec http-gateway ls -la /var/run/haproxy-runtime-api.sock
+make build
 ```
 
-**Using Docker:**
+## File Structure
+
+```
+test/
+├── README.md                      # This file
+├── FEATURES.md                    # Protocol support & features
+├── TESTING.md                     # Detailed testing guide
+├── docker-compose.yml             # Service definitions
+├── Makefile                       # Build and test targets
+├── haproxy-init.cfg               # HAProxy configuration
+├── run-local-test.sh              # Simple local test script
+├── run-github-action-tests.sh     # Full CI/CD test script
+├── Dockerfile.gateway             # Gateway image
+├── Dockerfile.backend             # Backend server image
+├── Dockerfile.backend-api         # Backend API image
+├── Dockerfile.client              # Test client image
+├── scripts/
+│   ├── generate-certs.sh          # SSL certificate generation
+│   ├── gateway-entrypoint.sh      # Gateway initialization
+│   ├── backend-entrypoint.sh      # Backend initialization
+│   ├── register-backend.sh        # Backend registration
+│   ├── configure-routes.sh        # Route configuration
+│   └── run-tests.sh               # Test execution
+├── backend/
+│   ├── main.go                    # Backend server implementation
+│   └── go.mod
+├── backend-api/
+│   ├── main.go                    # Backend API implementation
+│   └── go.mod
+└── client/
+    ├── cmd/
+    │   ├── test-client/           # Functional test client
+    │   └── perf-client/           # Performance test client
+    ├── README.md                  # Client documentation
+    └── go.mod
+```
+
+## Environment Variables
+
+### Gateway
 ```bash
-# Check logs
-docker-compose logs gateway
-
-# Verify HAProxy is running
-docker exec http-gateway ps aux | grep haproxy
-
-# Check runtime socket
-docker exec http-gateway ls -la /var/run/haproxy-runtime-api.sock
+LOG_LEVEL=debug                           # Logging level
+HAPROXY_RUNTIME_SOCKET=/var/run/haproxy-runtime-api.sock
 ```
 
-### Tests fail with connection errors
-
-**Using Podman:**
+### Backend Servers
 ```bash
-# Verify all services are running
-podman-compose ps
-
-# Check network connectivity
-podman-compose exec test-client ping gateway
-podman-compose exec test-client ping backend-api
-
-# Wait longer for services to be ready
-podman-compose run --rm test-client sleep 10 && /usr/local/bin/run-tests.sh
+SERVER_NAME=backend-server-1              # Unique server name
+SERVER_IP=                                # Auto-detected from eth0 (or set explicitly)
+SERVER_PORT=9000                          # Server port
+BACKEND_NAME=api-backend                  # Backend group
+GATEWAY_URL=http://gateway:9090           # Gateway API URL
+ENABLE_HTTP2=true                         # Enable HTTP/2
 ```
 
-**Using Docker:**
-```bash
-# Verify all services are running
-docker-compose ps
+## Common Make Commands
 
-# Check network connectivity
-docker-compose exec test-client ping gateway
-docker-compose exec test-client ping backend-api
+| Command | Description |
+|---------|-------------|
+| `make setup` | First-time setup (certs, build, start) |
+| `make up` | Start all services |
+| `make down` | Stop all services |
+| `make ps` | Show service status |
+| `make logs` | View all logs |
+| `make test` | Run all tests |
+| `make test-functional` | Functional tests only |
+| `make test-perf` | Performance tests only |
+| `make test-quick` | Quick smoke test |
+| `make clean` | Stop services and remove volumes |
+| `make reset` | Complete cleanup and rebuild |
+| `make help` | Show all available commands |
 
-# Wait longer for services to be ready
-docker-compose run --rm test-client sleep 10 && /usr/local/bin/run-tests.sh
-```
+## Additional Documentation
 
-### Backend API not updating
+- **[FEATURES.md](FEATURES.md)** - HTTP/2 support, protocol details, IP auto-detection
+- **[TESTING.md](TESTING.md)** - Comprehensive testing guide with examples
+- **[client/README.md](client/README.md)** - Test client documentation
+- **[../GATEWAY_FEATURES.md](../GATEWAY_FEATURES.md)** - Complete gateway feature documentation
+- **[../BACKEND_REGISTRATION.md](../BACKEND_REGISTRATION.md)** - Backend registration architecture
 
-**Using Podman:**
-```bash
-# Check backend API logs
-podman-compose logs backend-api
+## Getting Help
 
-# Verify backend data
-curl http://localhost:8000/backends | jq
+If you encounter issues:
 
-# Restart backend API
-podman-compose restart backend-api
-```
+1. Check the troubleshooting section above
+2. Review service logs: `make logs`
+3. Verify Docker/Podman resources are sufficient
+4. Try a complete reset: `make reset`
+5. Open an issue on GitHub
 
-**Using Docker:**
-```bash
-# Check backend API logs
-docker-compose logs backend-api
+## Success Indicators
 
-# Verify backend data
-curl http://localhost:8000/backends | jq
+After setup, you should see:
 
-# Restart backend API
-docker-compose restart backend-api
-```
-
-### Performance tests showing low throughput
-
-**Using Podman:**
-```bash
-# Monitor resource usage
-podman stats
-
-# Reduce concurrency
-podman-compose run --rm test-client /perf-client -c=10 -n=1000
-```
-
-**Using Docker:**
-```bash
-# Increase Docker resources (CPU/Memory)
-# Check Docker Desktop settings
-
-# Monitor resource usage
-docker stats
-
-# Reduce concurrency
-docker-compose run --rm test-client /perf-client -c=10 -n=1000
-```
-
-## CI/CD Integration
-
-### GitHub Actions Example
-
-```yaml
-name: Test Gateway
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Generate certificates
-        run: |
-          cd test
-          ./scripts/generate-certs.sh
-
-      - name: Start test environment
-        run: docker-compose -f test/docker-compose.yml up -d
-
-      - name: Wait for services
-        run: sleep 30
-
-      - name: Run functional tests
-        run: docker-compose -f test/docker-compose.yml run --rm test-client /test-client -verbose
-
-      - name: Run performance tests
-        run: docker-compose -f test/docker-compose.yml run --rm test-client /perf-client -c=50 -n=5000
-
-      - name: Cleanup
-        if: always()
-        run: docker-compose -f test/docker-compose.yml down -v
-```
-
-## Performance Benchmarks
-
-Expected performance on a typical development machine (4 CPU, 8GB RAM):
-
-| Test Type | Concurrency | Requests | RPS | Avg Latency | Success Rate |
-|-----------|-------------|----------|-----|-------------|--------------|
-| Light     | 10          | 1,000    | ~500-1000 | 10-20ms | >99% |
-| Medium    | 50          | 5,000    | ~1000-2000 | 20-50ms | >99% |
-| Heavy     | 100         | 10,000   | ~1500-3000 | 30-70ms | >98% |
-| Sustained | 20          | 30s      | ~500-1500 | 10-40ms | >99% |
-
-HTTP/2 typically shows 10-30% better performance compared to HTTP/1.1 under high load.
+✓ All Docker containers running (`make ps`)
+✓ Gateway responding on ports 8080, 8443, 9090
+✓ Backend API responding on port 8000
+✓ Backends auto-registered (`curl http://localhost:9090/api/backends | jq`)
+✓ Functional tests passing (6/6)
+✓ Performance tests with >98% success rate
+✓ Load balancing distributing across servers
 
 ## License
 

@@ -11,3 +11,14 @@ __debug_bin*
 pkg/protection/libblock_secrets.so
 pkg/protection/haproxy_wrapper
 test/test/certs/*
+
+# Test generated files
+test/*-results.txt
+test/main
+test/client/http2-client
+test/*.log
+
+# Build artifacts
+*.exe
+*.out
+*.test
