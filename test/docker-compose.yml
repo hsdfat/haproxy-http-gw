@@ -18,7 +18,7 @@ services:
       - gateway-net
     restart: unless-stopped
 
-  # Backend API Provider (REST API for dynamic backend discovery)
+  # Backend API ProviFder (REST API for dynamic backend discovery)
   backend-api:
     build:
       context: ..

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -32,7 +33,7 @@ type BackendResponse struct {
 
 func main() {
 	gatewayURL := flag.String("gateway", os.Getenv("GATEWAY_URL"), "Gateway URL")
-	gatewayHTTPS := flag.String("gateway-https", os.Getenv("GATEWAY_HTTPS_URL"), "Gateway HTTPS URL")
+	gatewayHTTPS := flag.String("gateway-https", os.Getenv("GATEWAY_HTTPS_URL"), "Gateway HTTPS URL (deprecated, use gateway for H2C)")
 	host := flag.String("host", "api.example.com", "Host header to use")
 	verbose := flag.Bool("verbose", false, "Verbose output")
 	flag.Parse()
@@ -46,7 +47,6 @@ func main() {
 
 	fmt.Println("=== HTTP Gateway Functional Tests ===")
 	fmt.Printf("Gateway HTTP:  %s\n", *gatewayURL)
-	fmt.Printf("Gateway HTTPS: %s\n", *gatewayHTTPS)
 	fmt.Printf("Host header:   %s\n", *host)
 	fmt.Println()
 
@@ -55,8 +55,8 @@ func main() {
 	// Test 1: Basic HTTP Request
 	results = append(results, testBasicHTTP(*gatewayURL, *host, *verbose))
 
-	// Test 2: HTTP/2 Support
-	results = append(results, testHTTP2(*gatewayHTTPS, *host, *verbose))
+	// Test 2: HTTP/2 Support (H2C - HTTP/2 over cleartext)
+	results = append(results, testHTTP2(*gatewayURL, *host, *verbose))
 
 	// Test 3: Load Balancing
 	results = append(results, testLoadBalancing(*gatewayURL, *host, *verbose))
@@ -148,13 +148,16 @@ func testBasicHTTP(gatewayURL, host string, verbose bool) TestResult {
 
 func testHTTP2(gatewayURL, host string, verbose bool) TestResult {
 	start := time.Now()
-	result := TestResult{Name: "HTTP/2 Support"}
+	result := TestResult{Name: "HTTP/2 Support (H2C)"}
 
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	// Create transport with H2C support (HTTP/2 over cleartext)
+	transport := &http2.Transport{
+		AllowHTTP: true, // Allow HTTP URLs
+		DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+			// Return a plain TCP connection instead of TLS for H2C
+			return net.Dial(network, addr)
+		},
 	}
-	// Enable HTTP/2 support
-	http2.ConfigureTransport(transport)
 
 	client := &http.Client{
 		Timeout:   5 * time.Second,

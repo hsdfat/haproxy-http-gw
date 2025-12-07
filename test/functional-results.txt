@@ -1,0 +1,26 @@
+=== HTTP Gateway Functional Tests ===
+Gateway HTTP:  http://localhost:8080
+Host header:   api.example.com
+
+  Backend: backend-server-3, Path: /api/test
+  Protocol: HTTP/2.0
+  Server distribution:
+    backend-server-2: 4 requests
+    backend-server-3: 3 requests
+    backend-server-1: 3 requests
+  Path /api/users → Server backend-server-3
+  Path /api/orders → Server backend-server-1
+  Path /api/products → Server backend-server-2
+  Host api.example.com → Status 200
+  Host www.example.com → Status 200
+  Health check returned 200
+
+=== Test Summary ===
+✓ PASS Basic HTTP Request (14.80ms)
+✓ PASS HTTP/2 Support (H2C) (12.42ms)
+✓ PASS Load Balancing (11.92ms)
+✓ PASS Different Paths (1.50ms)
+✓ PASS Multiple Hosts (2.38ms)
+✓ PASS Health Check (1.19ms)
+
+Total: 6, Passed: 6, Failed: 0

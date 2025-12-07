@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/http2"
 )
 
 type Stats struct {
@@ -84,7 +86,7 @@ func main() {
 	concurrency := flag.Int("c", 10, "Number of concurrent workers")
 	requests := flag.Int("n", 1000, "Total number of requests")
 	duration := flag.Duration("d", 0, "Test duration (overrides -n)")
-	http2 := flag.Bool("http2", false, "Use HTTP/2")
+	useHTTP2 := flag.Bool("http2", false, "Use HTTP/2")
 	flag.Parse()
 
 	if *gatewayURL == "" {
@@ -102,7 +104,7 @@ func main() {
 	} else {
 		fmt.Printf("Requests:    %d\n", *requests)
 	}
-	fmt.Printf("HTTP/2:      %v\n", *http2)
+	fmt.Printf("HTTP/2:      %v\n", *useHTTP2)
 	fmt.Println()
 
 	stats := &Stats{}
@@ -124,6 +126,11 @@ func main() {
 		MaxIdleConns:        *concurrency,
 		MaxIdleConnsPerHost: *concurrency,
 		IdleConnTimeout:     90 * time.Second,
+	}
+
+	if *useHTTP2 {
+		// Enable HTTP/2 support (H2C - HTTP/2 over cleartext)
+		http2.ConfigureTransport(transport)
 	}
 
 	client := &http.Client{

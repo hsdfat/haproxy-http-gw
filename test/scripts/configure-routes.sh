@@ -48,7 +48,7 @@ done
 print_info "Adding route: api.example.com/api -> api-backend"
 response=$(curl -sf -X POST "$GATEWAY_API/api/routes" \
     -H "Content-Type: application/json" \
-    -d '{"host":"api.example.com","path":"/api","backend":"api-backend"}' 2>&1)
+    -d '{"host":"127.0.0.1","path":"/healthz","backend":"api-backend"}' 2>&1)
 
 if echo "$response" | grep -q '"success":true'; then
     print_success "API route added successfully"
@@ -62,7 +62,7 @@ fi
 print_info "Adding route: www.example.com/ -> web-backend"
 response=$(curl -sf -X POST "$GATEWAY_API/api/routes" \
     -H "Content-Type: application/json" \
-    -d '{"host":"www.example.com","path":"/","backend":"web-backend"}' 2>&1)
+    -d '{"host":"127.0.0.1","path":"/","backend":"web-backend"}' 2>&1)
 
 if echo "$response" | grep -q '"success":true'; then
     print_success "Web route added successfully"

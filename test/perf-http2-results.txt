@@ -1,0 +1,20 @@
+=== HTTP Gateway Performance Test ===
+URL:         http://localhost:8080/api/test
+Host:        api.example.com
+Concurrency: 50
+Requests:    5000
+HTTP/2:      true
+
+
+
+=== Performance Test Results ===
+Duration:        637.661ms
+Total Requests:  5000
+Successful:      5000 (100.00%)
+Failed:          0 (0.00%)
+Requests/sec:    7841.16
+
+Latency Stats:
+  Min:     0.22 ms
+  Max:     40.61 ms
+  Average: 5.84 ms
