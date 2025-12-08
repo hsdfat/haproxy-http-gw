@@ -194,6 +194,34 @@ sudo apt-get install jq bc
 pip3 install podman-compose
 ```
 
+### Frontend Management Testing
+
+Test the frontend management feature (multiple frontends, per-frontend backends/routes):
+
+```bash
+cd test
+./run-frontend-test.sh
+```
+
+This runs:
+1. **Unit Tests**: Configuration validation, providers, registry
+2. **API Tests**: Frontend management endpoints
+   - List frontends
+   - Get frontend details
+   - Frontend statistics
+3. **Backend Tests**: Per-frontend backend registration
+   - Register backends to specific frontends
+   - List backends per frontend
+   - Unregister backends
+4. **Route Tests**: Per-frontend route management
+   - Add routes to frontends
+   - List routes per frontend
+   - Delete routes
+5. **Configuration Validation**: Example YAML files
+6. **Documentation Checks**: Required docs exist
+
+**GitHub CI**: Frontend management tests run automatically on push/PR via [.github/workflows/frontend-management-tests.yml](../.github/workflows/frontend-management-tests.yml)
+
 See [Testing Guide](TESTING.md) for detailed testing instructions.
 
 ## Development Workflow

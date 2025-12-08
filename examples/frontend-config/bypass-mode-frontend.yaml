@@ -1,0 +1,45 @@
+# Bypass Mode Frontend Configuration (Phase 4 Feature)
+# This example shows bypass_rules configuration
+# NOTE: bypass_rules is parsed but NOT ENFORCED until Phase 4 is implemented
+# Currently, routes can still be added and ACLs will be created
+
+frontends:
+  # Simple Load Balancer (bypass mode)
+  - id: "simple-lb"
+    name: "simple-loadbalancer"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      - address: "0.0.0.0"
+        port: 9000
+        protocol: "http"
+        http2: true
+
+    routing:
+      bypass_rules: true  # Phase 4 feature - currently parsed but not enforced
+      default_backend: "app-pool"
+
+    options:
+      max_connections: 50000
+      timeout_client: "30s"
+
+  # Normal frontend with routing
+  - id: "routed-frontend"
+    name: "routed-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      - address: "0.0.0.0"
+        port: 8080
+        protocol: "http"
+        http2: true
+
+    routing:
+      bypass_rules: false  # Normal routing with ACLs
+      default_backend: "default-backend"
+
+    options:
+      max_connections: 10000
+      timeout_client: "30s"

@@ -1,0 +1,71 @@
+# Multiple Frontends Configuration
+# This example shows how to configure multiple frontends for different purposes
+
+frontends:
+  # Public API Frontend
+  - id: "public-api"
+    name: "public-api-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      - address: "0.0.0.0"
+        port: 8080
+        protocol: "http"
+        http2: true
+
+      - address: "0.0.0.0"
+        port: 8443
+        protocol: "https"
+        ssl: true
+        http2: true
+        alpn: "h2,http/1.1"
+        cert_dir: "/etc/haproxy/certs/public"
+
+    routing:
+      bypass_rules: false
+      default_backend: "public-api-default"
+
+    options:
+      max_connections: 15000
+      timeout_client: "30s"
+
+  # Internal API Frontend
+  - id: "internal-api"
+    name: "internal-api-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      - address: "192.168.1.1"
+        port: 9080
+        protocol: "http"
+        http2: true
+
+    routing:
+      bypass_rules: false
+      default_backend: "internal-api-default"
+
+    options:
+      max_connections: 5000
+      timeout_client: "60s"
+
+  # Admin Frontend
+  - id: "admin-frontend"
+    name: "admin-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      - address: "127.0.0.1"
+        port: 9090
+        protocol: "http"
+        http2: false
+
+    routing:
+      bypass_rules: false
+      default_backend: "admin-backend"
+
+    options:
+      max_connections: 100
+      timeout_client: "120s"

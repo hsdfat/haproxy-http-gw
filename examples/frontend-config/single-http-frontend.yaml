@@ -1,0 +1,24 @@
+# Single HTTP Frontend Configuration
+# This example shows a simple single frontend setup
+
+frontends:
+  - id: "http-frontend"
+    name: "http-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      - address: "0.0.0.0"
+        port: 8080
+        protocol: "http"
+        http2: true
+        ipv6: false
+
+    routing:
+      bypass_rules: false
+      default_backend: "default-backend"
+
+    options:
+      max_connections: 10000
+      timeout_client: "30s"
+      http_connection_mode: "http-keep-alive"

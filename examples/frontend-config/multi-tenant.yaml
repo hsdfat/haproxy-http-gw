@@ -1,0 +1,79 @@
+# Multi-Tenant Frontend Configuration
+# This example shows how to set up separate frontends for different tenants
+
+frontends:
+  # Tenant A
+  - id: "tenant-a"
+    name: "tenant-a-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      - address: "0.0.0.0"
+        port: 8080
+        protocol: "http"
+        http2: true
+
+      - address: "0.0.0.0"
+        port: 8443
+        protocol: "https"
+        ssl: true
+        http2: true
+        alpn: "h2,http/1.1"
+        cert_dir: "/etc/haproxy/certs/tenant-a"
+
+    routing:
+      bypass_rules: false
+      default_backend: "tenant-a-default"
+
+    options:
+      max_connections: 10000
+      timeout_client: "30s"
+
+  # Tenant B
+  - id: "tenant-b"
+    name: "tenant-b-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      - address: "0.0.0.0"
+        port: 8081
+        protocol: "http"
+        http2: true
+
+      - address: "0.0.0.0"
+        port: 8444
+        protocol: "https"
+        ssl: true
+        http2: true
+        alpn: "h2,http/1.1"
+        cert_dir: "/etc/haproxy/certs/tenant-b"
+
+    routing:
+      bypass_rules: false
+      default_backend: "tenant-b-default"
+
+    options:
+      max_connections: 5000
+      timeout_client: "30s"
+
+  # Tenant C
+  - id: "tenant-c"
+    name: "tenant-c-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      - address: "0.0.0.0"
+        port: 8082
+        protocol: "http"
+        http2: true
+
+    routing:
+      bypass_rules: false
+      default_backend: "tenant-c-default"
+
+    options:
+      max_connections: 8000
+      timeout_client: "45s"

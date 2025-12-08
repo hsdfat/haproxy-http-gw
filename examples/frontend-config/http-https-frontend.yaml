@@ -1,0 +1,35 @@
+# HTTP and HTTPS Frontend Configuration
+# This example shows a frontend with both HTTP and HTTPS bindings
+
+frontends:
+  - id: "web-frontend"
+    name: "web-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      # HTTP binding
+      - address: "0.0.0.0"
+        port: 80
+        protocol: "http"
+        http2: true
+        ipv6: true
+
+      # HTTPS binding
+      - address: "0.0.0.0"
+        port: 443
+        protocol: "https"
+        ssl: true
+        http2: true
+        alpn: "h2,http/1.1"
+        cert_dir: "/etc/haproxy/certs"
+        ipv6: true
+
+    routing:
+      bypass_rules: false
+      default_backend: "web-backend"
+
+    options:
+      max_connections: 20000
+      timeout_client: "60s"
+      http_connection_mode: "http-keep-alive"
