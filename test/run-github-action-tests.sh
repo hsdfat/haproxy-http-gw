@@ -127,7 +127,7 @@ API_BACKEND_FOUND=false
 WEB_BACKEND_FOUND=false
 
 while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-    BACKENDS=$(curl -sf http://localhost:9090/api/backends 2>/dev/null || echo "")
+    BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends 2>/dev/null || echo "")
 
     if echo "$BACKENDS" | grep -q "api-backend"; then
         API_BACKEND_FOUND=true
@@ -149,7 +149,7 @@ done
 
 echo ""
 echo "Final backend status:"
-BACKENDS=$(curl -sf http://localhost:9090/api/backends)
+BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends)
 echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
 
 if [ "$API_BACKEND_FOUND" != true ]; then
@@ -300,9 +300,9 @@ fi
 print_section "Test Dynamic Backend Updates"
 echo "Testing dynamic backend registration API..."
 
-# Register a new backend via API
-echo "Registering new backend via API..."
-RESPONSE=$(curl -sf -X POST http://localhost:9090/api/backends \
+# Register a new backend via API using frontend-scoped API
+echo "Registering new backend via API to frontend 'default'..."
+RESPONSE=$(curl -sf -X POST http://localhost:9090/api/frontends/default/backends \
     -H "Content-Type: application/json" \
     -d '{
       "name": "dynamic-test-backend",
@@ -327,7 +327,7 @@ sleep 5
 
 # Verify backend was added
 echo "Verifying backend was added..."
-BACKENDS=$(curl -sf http://localhost:9090/api/backends)
+BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends)
 if echo "$BACKENDS" | grep -q "dynamic-test-backend"; then
     print_success "Dynamic backend registration successful"
 else
@@ -338,7 +338,7 @@ fi
 
 # Test unregistration
 echo "Testing backend unregistration..."
-UNREG_RESPONSE=$(curl -sf -X DELETE http://localhost:9090/api/backends/dynamic-test-backend)
+UNREG_RESPONSE=$(curl -sf -X DELETE http://localhost:9090/api/frontends/default/backends/dynamic-test-backend)
 if echo "$UNREG_RESPONSE" | grep -q '"success":true'; then
     print_success "Backend unregistration successful"
 else
