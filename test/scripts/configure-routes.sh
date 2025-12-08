@@ -24,8 +24,9 @@ print_info() {
 
 # Gateway API endpoint
 GATEWAY_API="${GATEWAY_API:-http://localhost:9090}"
+FRONTEND_ID="${FRONTEND_ID:-default}"
 
-print_info "Configuring gateway routes via API at $GATEWAY_API"
+print_info "Configuring gateway routes via API at $GATEWAY_API for frontend '$FRONTEND_ID'"
 
 # Wait for API to be ready
 print_info "Waiting for Gateway API to be ready..."
@@ -46,7 +47,7 @@ done
 
 # Add route for api.example.com/api -> api-backend
 print_info "Adding route: api.example.com/api -> api-backend"
-response=$(curl -sf -X POST "$GATEWAY_API/api/routes" \
+response=$(curl -sf -X POST "$GATEWAY_API/api/frontends/$FRONTEND_ID/routes" \
     -H "Content-Type: application/json" \
     -d '{"host":"127.0.0.1","path":"/healthz","backend":"api-backend"}' 2>&1)
 
@@ -60,7 +61,7 @@ fi
 
 # Add route for www.example.com/ -> web-backend
 print_info "Adding route: www.example.com/ -> web-backend"
-response=$(curl -sf -X POST "$GATEWAY_API/api/routes" \
+response=$(curl -sf -X POST "$GATEWAY_API/api/frontends/$FRONTEND_ID/routes" \
     -H "Content-Type: application/json" \
     -d '{"host":"127.0.0.1","path":"/","backend":"web-backend"}' 2>&1)
 
@@ -74,6 +75,6 @@ fi
 
 # List all routes
 print_info "Current routes configuration:"
-curl -s "$GATEWAY_API/api/routes" | python3 -m json.tool 2>/dev/null || curl -s "$GATEWAY_API/api/routes"
+curl -s "$GATEWAY_API/api/frontends/$FRONTEND_ID/routes" | python3 -m json.tool 2>/dev/null || curl -s "$GATEWAY_API/api/frontends/$FRONTEND_ID/routes"
 
 print_success "All routes configured successfully"
