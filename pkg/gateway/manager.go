@@ -71,14 +71,16 @@ func NewManager(config ManagerConfig) *Manager {
 func (m *Manager) Start(ctx context.Context) error {
 	logger.Info("Starting Gateway Manager")
 
-	// Start the backend provider
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		if err := m.provider.Start(ctx, m.eventChan); err != nil {
-			logger.Errorf("Backend provider error: %v", err)
-		}
-	}()
+	// Start the backend provider if one is configured
+	if m.provider != nil {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			if err := m.provider.Start(ctx, m.eventChan); err != nil {
+				logger.Errorf("Backend provider error: %v", err)
+			}
+		}()
+	}
 
 	// Start the event processor
 	m.wg.Add(1)
@@ -233,6 +235,12 @@ func (m *Manager) reconcile() {
 	defer m.mu.RUnlock()
 
 	logger.Debug("Running periodic reconciliation")
+
+	// Skip reconciliation if no provider is configured
+	if m.provider == nil {
+		logger.Debug("No provider configured, skipping reconciliation")
+		return
+	}
 
 	// Get current backends from provider
 	backends, err := m.provider.GetBackends()

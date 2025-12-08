@@ -81,7 +81,7 @@ fi
 
 # Test 2: Run all gateway tests
 print_test "Running all gateway unit tests..."
-if go test ./pkg/gateway/ 2>&1 | grep -q "PASS"; then
+if go test ./pkg/gateway/ 2>&1 | grep -q "ok"; then
     print_success "All gateway unit tests passed"
 else
     print_error "Gateway unit tests failed"

@@ -103,9 +103,9 @@ $COMPOSE_CMD ps
 print_info "Step 7: Waiting for backend servers to register with gateway..."
 sleep 15
 
-# Check registered backends
+# Check registered backends using frontend-scoped API
 print_info "Step 8: Verifying backend registration..."
-BACKENDS=$(curl -sf http://localhost:9090/api/backends)
+BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends)
 
 if command -v jq &> /dev/null; then
     echo "$BACKENDS" | jq '.'
@@ -173,9 +173,9 @@ else
     exit 1
 fi
 
-# Test 3: Test backend registration API
+# Test 3: Test backend registration API (using frontend-scoped API)
 print_info "Test 3: Testing backend registration API"
-TEST_BACKEND=$(curl -sf -X POST http://localhost:9090/api/backends \
+TEST_BACKEND=$(curl -sf -X POST http://localhost:9090/api/frontends/default/backends \
     -H 'Content-Type: application/json' \
     -d '{"name":"test-backend","servers":[{"name":"test-server","ip":"backend-server-1","port":9000}]}' || echo "")
 
@@ -215,11 +215,14 @@ echo ""
 echo "  View backend logs:"
 echo "    $COMPOSE_CMD logs -f backend-server-1"
 echo ""
-echo "  List registered backends:"
-echo "    curl http://localhost:9090/api/backends | jq"
+echo "  List frontends:"
+echo "    curl http://localhost:9090/api/frontends | jq"
 echo ""
-echo "  Register a new backend:"
-echo "    curl -X POST http://localhost:9090/api/backends -H 'Content-Type: application/json' \\"
+echo "  List registered backends for frontend 'default':"
+echo "    curl http://localhost:9090/api/frontends/default/backends | jq"
+echo ""
+echo "  Register a new backend to frontend 'default':"
+echo "    curl -X POST http://localhost:9090/api/frontends/default/backends -H 'Content-Type: application/json' \\"
 echo "      -d '{\"name\":\"my-backend\",\"servers\":[{\"name\":\"server1\",\"ip\":\"192.168.1.10\",\"port\":9000}]}'"
 echo ""
 echo "  Stop services:"

@@ -54,4 +54,12 @@ export HAPROXY_RUNTIME_SOCKET="$ACTUAL_SOCKET"
 export HAPROXY_PID_FILE="/tmp/haproxy-gateway/haproxy.pid"
 export HAPROXY_CONFIG="/etc/haproxy/haproxy.cfg"
 export HAPROXY_BIN="/usr/local/sbin/haproxy"
-exec /usr/local/bin/http-gateway
+
+# Check if frontend config file is specified via environment variable
+if [ -n "$FRONTEND_CONFIG_FILE" ]; then
+    echo "Starting in Frontend Management Mode with config: $FRONTEND_CONFIG_FILE"
+    exec /usr/local/bin/http-gateway --frontend-config="$FRONTEND_CONFIG_FILE"
+else
+    echo "Starting in Legacy Mode (single frontend)"
+    exec /usr/local/bin/http-gateway
+fi

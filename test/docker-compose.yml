@@ -11,9 +11,11 @@ services:
       - "9090:9090"   # API/Stats
     volumes:
       - ./certs:/etc/haproxy/certs:ro
+      - ./frontend-config-test.yaml:/etc/haproxy/frontend-config.yaml:ro
       - haproxy-config:/tmp/haproxy-gateway
     environment:
       - LOG_LEVEL=debug
+      - FRONTEND_CONFIG_FILE=/etc/haproxy/frontend-config.yaml
     networks:
       - gateway-net
     restart: unless-stopped

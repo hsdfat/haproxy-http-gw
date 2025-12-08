@@ -28,11 +28,23 @@ import (
 	"github.com/haproxytech/kubernetes-ingress/pkg/haproxy/api"
 	"github.com/haproxytech/kubernetes-ingress/pkg/haproxy/instance"
 	"github.com/haproxytech/kubernetes-ingress/pkg/utils"
+	"github.com/jessevdk/go-flags"
 )
 
 func main() {
 	logger := utils.GetLogger()
 	logger.SetLevel(utils.Info)
+
+	// Parse command-line flags
+	var osArgs utils.OSArgs
+	parser := flags.NewParser(&osArgs, flags.Default)
+	if _, err := parser.Parse(); err != nil {
+		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
+			os.Exit(0)
+		}
+		logger.Error(err)
+		os.Exit(1)
+	}
 
 	// Get runtime socket from environment or use default
 	runtimeSocket := os.Getenv("HAPROXY_RUNTIME_SOCKET")
@@ -53,9 +65,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Example 1: Simple Provider with manual backend management
-	logger.Info("=== Example 1: Simple Provider ===")
-	runSimpleProviderExample(haproxyClient)
+	// Check if frontend config file is specified
+	if osArgs.FrontendConfigFile != "" {
+		logger.Infof("Starting with frontend management mode (config: %s)", osArgs.FrontendConfigFile)
+		runFrontendManagementMode(haproxyClient, osArgs)
+	} else {
+		logger.Info("Starting in legacy mode (single frontend)")
+		runSimpleProviderExample(haproxyClient)
+	}
 }
 
 // monitorHAProxyReload monitors the reload flag and triggers HAProxy reload when needed
@@ -276,4 +293,93 @@ func runPollingProviderExample(haproxyClient api.HAProxyClient) {
 	logger.Info("Shutting down...")
 	cancel()
 	gw.Stop()
+}
+
+// runFrontendManagementMode runs the gateway in frontend management mode
+// with support for multiple frontends configured via YAML or flags
+func runFrontendManagementMode(haproxyClient api.HAProxyClient, osArgs utils.OSArgs) {
+	logger := utils.GetLogger()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create configuration registry with providers in priority order
+	registry := gateway.NewConfigRegistry()
+
+	// 1. Try YAML config file first (highest priority)
+	if osArgs.FrontendConfigFile != "" {
+		registry.Register(gateway.NewYAMLConfigProvider(osArgs.FrontendConfigFile))
+	}
+
+	// 2. Fall back to command-line flags (backward compatibility)
+	registry.Register(gateway.NewFlagConfigProvider(osArgs))
+
+	// Load configuration
+	config, err := registry.LoadConfig()
+	if err != nil {
+		logger.Errorf("Failed to load frontend configuration: %v", err)
+		os.Exit(1)
+	}
+
+	logger.Infof("Loaded configuration with %d frontend(s)", len(config.Frontends))
+	for _, fe := range config.Frontends {
+		logger.Infof("  - Frontend '%s' (ID: %s): %d binding(s)", fe.Name, fe.ID, len(fe.Bindings))
+	}
+
+	// Create FrontendManager
+	frontendManager := gateway.NewFrontendManager(haproxyClient, *config)
+
+	// Start all frontends
+	if err := frontendManager.Start(ctx); err != nil {
+		logger.Errorf("Failed to start frontends: %v", err)
+		os.Exit(1)
+	}
+
+	// Start Enhanced API Server (supports frontend-scoped operations)
+	apiPort := 9090
+	enhancedAPI := gateway.NewEnhancedAPIServer(frontendManager, apiPort)
+	go func() {
+		if err := enhancedAPI.Start(); err != nil && err != http.ErrServerClosed {
+			logger.Errorf("Enhanced API server error: %v", err)
+		}
+	}()
+
+	// Start HAProxy reload monitor
+	go monitorHAProxyReload(ctx, logger)
+
+	logger.Info("Frontend Management Gateway is running")
+	logger.Infof("Enhanced API server listening on :%d", apiPort)
+	logger.Info("")
+	logger.Info("Frontend Management API:")
+	logger.Info("  GET    /api/frontends - List all frontends")
+	logger.Info("  GET    /api/frontends/{id} - Get frontend details")
+	logger.Info("  GET    /api/frontends/{id}/stats - Get frontend statistics")
+	logger.Info("")
+	logger.Info("Backend Management API (per frontend):")
+	logger.Info("  POST   /api/frontends/{id}/backends - Register backend to frontend")
+	logger.Info("  GET    /api/frontends/{id}/backends - List backends for frontend")
+	logger.Info("  DELETE /api/frontends/{id}/backends/{name} - Unregister backend")
+	logger.Info("")
+	logger.Info("Route Management API (per frontend):")
+	logger.Info("  POST   /api/frontends/{id}/routes - Add route to frontend")
+	logger.Info("  GET    /api/frontends/{id}/routes - List routes for frontend")
+	logger.Info("  DELETE /api/frontends/{id}/routes/{route_id} - Delete route")
+	logger.Info("")
+	logger.Info("Example usage:")
+	logger.Info("  # List frontends")
+	logger.Info("  curl http://localhost:9090/api/frontends")
+	logger.Info("")
+	logger.Info("  # Register backend to specific frontend")
+	logger.Info("  curl -X POST http://localhost:9090/api/frontends/public-api/backends \\")
+	logger.Info("    -H 'Content-Type: application/json' \\")
+	logger.Info("    -d '{\"name\":\"api-backend\",\"servers\":[{\"name\":\"srv1\",\"ip\":\"10.0.1.10\",\"port\":8080}]}'")
+
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+
+	logger.Info("Shutting down frontend management gateway...")
+	enhancedAPI.Stop()
+	cancel()
+	frontendManager.Stop()
 }

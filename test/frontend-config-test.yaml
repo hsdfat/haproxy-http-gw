@@ -1,0 +1,33 @@
+# Frontend Configuration for Test Environment
+# This configuration sets up a single frontend for testing the frontend management feature
+
+frontends:
+  - id: "default"
+    name: "http-gateway"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      # HTTP binding
+      - address: "0.0.0.0"
+        port: 8080
+        protocol: "http"
+        http2: true
+
+      # HTTPS binding (disabled in test to avoid cert issues)
+      # - address: "0.0.0.0"
+      #   port: 8443
+      #   protocol: "https"
+      #   ssl: true
+      #   http2: true
+      #   alpn: "h2,http/1.1"
+      #   cert_dir: "/etc/haproxy/certs"
+
+    routing:
+      bypass_rules: false
+      default_backend: "api-backend"
+
+    options:
+      max_connections: 10000
+      timeout_client: "30s"
+      http_connection_mode: "http-keep-alive"

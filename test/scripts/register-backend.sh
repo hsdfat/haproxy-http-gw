@@ -6,6 +6,7 @@ set -e
 
 # Configuration
 GATEWAY_URL="${GATEWAY_URL:-http://gateway:9090}"
+FRONTEND_ID="${FRONTEND_ID:-default}"  # Frontend ID to register backend with
 BACKEND_NAME="${BACKEND_NAME:-}"
 SERVER_NAME="${SERVER_NAME:-$(hostname)}"
 SERVER_IP="${SERVER_IP:-$(hostname)}"
@@ -40,6 +41,7 @@ fi
 
 print_info "Backend Registration Configuration:"
 echo "  Gateway URL: $GATEWAY_URL"
+echo "  Frontend ID: $FRONTEND_ID"
 echo "  Backend Name: $BACKEND_NAME"
 echo "  Server Name: $SERVER_NAME"
 echo "  Server IP: $SERVER_IP"
@@ -63,31 +65,13 @@ for i in $(seq 1 $MAX_RETRIES); do
     sleep $RETRY_DELAY
 done
 
-# Check if backend already exists
-print_info "Checking if backend '$BACKEND_NAME' already exists..."
-EXISTING_BACKEND=$(curl -sf "$GATEWAY_URL/api/backends" | grep -o "\"$BACKEND_NAME\"" || true)
+# Register backend with frontend-scoped API
+print_info "Registering backend '$BACKEND_NAME' with server '$SERVER_NAME' to frontend '$FRONTEND_ID'..."
 
-if [ -n "$EXISTING_BACKEND" ]; then
-    print_info "Backend '$BACKEND_NAME' already exists, will update with new server"
-
-    # Get existing backend configuration
-    EXISTING_SERVERS=$(curl -sf "$GATEWAY_URL/api/backends" | jq -r ".backends.\"$BACKEND_NAME\".Servers // []")
-
-    # Add current server to the list
-    NEW_SERVERS=$(echo "$EXISTING_SERVERS" | jq ". + [{\"name\":\"$SERVER_NAME\",\"ip\":\"$SERVER_IP\",\"port\":$SERVER_PORT}]")
-
-    # Register updated backend
-    RESPONSE=$(curl -sf -X POST "$GATEWAY_URL/api/backends" \
-        -H "Content-Type: application/json" \
-        -d "{\"name\":\"$BACKEND_NAME\",\"servers\":$NEW_SERVERS}" || echo "")
-else
-    print_info "Registering new backend '$BACKEND_NAME' with server '$SERVER_NAME'..."
-
-    # Register new backend with single server
-    RESPONSE=$(curl -sf -X POST "$GATEWAY_URL/api/backends" \
-        -H "Content-Type: application/json" \
-        -d "{\"name\":\"$BACKEND_NAME\",\"servers\":[{\"name\":\"$SERVER_NAME\",\"ip\":\"$SERVER_IP\",\"port\":$SERVER_PORT}]}" || echo "")
-fi
+# Register new backend with single server using frontend-scoped API
+RESPONSE=$(curl -sf -X POST "$GATEWAY_URL/api/frontends/$FRONTEND_ID/backends" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\":\"$BACKEND_NAME\",\"servers\":[{\"name\":\"$SERVER_NAME\",\"ip\":\"$SERVER_IP\",\"port\":$SERVER_PORT}]}" || echo "")
 
 # Check response
 if echo "$RESPONSE" | grep -q '"success":true'; then
