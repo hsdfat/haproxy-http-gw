@@ -199,6 +199,32 @@ jobs:
       # This allows frontends to start without validation errors while backends register.
       # All backends register successfully and round-robin load balancing works across all frontends.
 
+      - name: Verify backends are serving traffic
+        run: |
+          cd test
+          echo "Waiting for HAProxy to reload with registered backends..."
+          sleep 5
+
+          echo "Verifying frontends are serving traffic..."
+          for i in {1..20}; do
+            # Test default frontend (8080)
+            RESP=$(curl -s http://localhost:8080/ || echo "")
+            if echo "$RESP" | grep -q "backend-server"; then
+              echo "✓ Default frontend (8080) is serving traffic"
+              break
+            fi
+
+            if [ $i -eq 20 ]; then
+              echo "✗ Default frontend not serving traffic after 20 attempts"
+              echo "Last response: $RESP"
+              podman-compose logs gateway
+              exit 1
+            fi
+
+            echo "Attempt $i/20: Waiting for backends to serve traffic..."
+            sleep 3
+          done
+
       - name: View service logs (pre-test)
         if: always()
         run: |
