@@ -1,67 +1,124 @@
-# ![HAProxy](https://github.com/haproxytech/kubernetes-ingress/raw/master/assets/images/haproxy-weblogo-210x49.png "HAProxy")
+# HAProxy HTTP Gateway
 
-## HAProxy Kubernetes Ingress Controller
+A dynamic HTTP gateway built on HAProxy with support for multiple frontends, dynamic backend registration, and HTTP/2 (H2C) protocol.
 
-[![Contributors](https://img.shields.io/github/contributors/haproxytech/kubernetes-ingress?color=purple)](https://github.com/haproxy/haproxy/blob/master/CONTRIBUTING)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/haproxytech/kubernetes-ingress)](https://goreportcard.com/report/github.com/haproxytech/kubernetes-ingress)
+## Features
 
-### Description
+- **Multi-Frontend Support** - Run multiple independent HTTP frontends on different ports
+- **Dynamic Backend Registration** - Backends self-register via API on startup
+- **HTTP/2 (H2C)** - HTTP/2 over cleartext support on all frontends
+- **Round-Robin Load Balancing** - Automatic traffic distribution across backend servers
+- **Zero-Downtime Reloads** - Graceful HAProxy configuration updates
+- **RESTful API** - Manage frontends and backends via HTTP API
 
-An ingress controller is a Kubernetes resource that routes traffic from outside your cluster to services within the cluster.
+## Quick Start
 
-Detailed documentation can be found within the [Official Documentation](https://www.haproxy.com/documentation/kubernetes/latest/).
-
-You can also find in this repository a list of all available [Ingress annotations](https://github.com/haproxytech/kubernetes-ingress/blob/master/documentation/README.md).
-### Usage
-
-Docker image is available on Docker Hub: [haproxytech/kubernetes-ingress](https://hub.docker.com/r/haproxytech/kubernetes-ingress)
-
-If you prefer to build it from source use (change to appropriate platform if needed with TARGETPLATFORM, default platform is linux/amd64)
+### Running Tests
 
 ```bash
-make build
+cd test
+./run-local-test.sh
 ```
-With non default platform add appropriate TARGETPLATFORM
+
+This will:
+1. Build all container images
+2. Start 3 frontends (ports 8080, 8081, 8082)
+3. Start 9 backend servers
+4. Run functional and performance tests
+5. Verify load balancing and HTTP/2 support
+
+### Test Endpoints
+
+- **Default Frontend:** http://localhost:8080
+- **API Frontend:** http://localhost:8081 (HTTP/2)
+- **Web Frontend:** http://localhost:8082 (HTTP/2)
+- **Gateway API:** http://localhost:9090
+
+## Documentation
+
+See [docs/](docs/) directory for comprehensive documentation:
+
+- **[Gateway Architecture](docs/gateway-architecture.md)** - Architecture, components, and design patterns
+- **[Gateway API](docs/gateway-api.md)** - API reference and usage examples
+- **[Multi-Frontend Setup](docs/multi-frontend-setup.md)** - Multi-frontend configuration and testing
+- **[Testing Guide](docs/testing-guide.md)** - Test environment and execution
+- **[Test Features](docs/test-features.md)** - Test features and capabilities
+
+## Architecture
+
+```
+┌─────────────────────────────────────────┐
+│     HAProxy HTTP Gateway                │
+├─────────────────────────────────────────┤
+│  Frontend: default (8080)               │
+│    └─> api-backend (3 servers)          │
+│                                         │
+│  Frontend: frontend-api (8081, H2C)     │
+│    └─> api-backend (3 servers)          │
+│                                         │
+│  Frontend: frontend-web (8082, H2C)     │
+│    └─> web-backend (2 servers)          │
+└─────────────────────────────────────────┘
+```
+
+## Configuration
+
+- **Frontend Config:** [test/frontend-config-test.yaml](test/frontend-config-test.yaml)
+- **Docker Compose:** [test/docker-compose.yml](test/docker-compose.yml)
+- **GitHub Actions:** [.github/workflows/gateway-tests.yml](.github/workflows/gateway-tests.yml)
+
+## API Endpoints
+
+### Frontend Management
 
 ```bash
-make build TARGETPLATFORM=linux/arm/v6
+# List all frontends
+curl http://localhost:9090/api/frontends
+
+# Get frontend details
+curl http://localhost:9090/api/frontends/default
 ```
 
-Example environment can be created with
+### Backend Management
 
 ```bash
-make example
+# List backends for a frontend
+curl http://localhost:9090/api/frontends/default/backends
+
+# Register a new backend
+curl -X POST http://localhost:9090/api/frontends/default/backends \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "new-backend",
+    "servers": [
+      {"name": "srv1", "ip": "192.168.1.10", "port": 8080}
+    ]
+  }'
+
+# Unregister a backend
+curl -X DELETE http://localhost:9090/api/frontends/default/backends/new-backend
 ```
 
-Please see [controller.md](https://github.com/haproxytech/kubernetes-ingress/blob/master/documentation/controller.md) for all available arguments of controller image.
-
-Available customisations are described in [doc](https://github.com/haproxytech/kubernetes-ingress/blob/master/documentation/README.md)
-
-Basic setup to to run controller is described in [yaml](https://github.com/haproxytech/kubernetes-ingress/blob/master/deploy/haproxy-ingress.yaml) file.
+## Building
 
 ```bash
-kubectl apply -f deploy/haproxy-ingress.yaml
+# Build gateway binary
+go build -o http-gateway ./cmd/http-gateway
+
+# Build with Docker
+docker build -t http-gateway -f test/Dockerfile .
 ```
 
-### HAProxy Helm Charts
+## Testing
 
-Official HAProxy Technologies Helm Charts for deploying on [Kubernetes](https://kubernetes.io/) are available in [haproxytech/helm-charts](https://github.com/haproxytech/helm-charts) repository
+### Local Tests
+```bash
+cd test && ./run-local-test.sh
+```
 
-### Contributing
-
-Thanks for your interest in the project and your willing to contribute:
-
-- Pull requests are welcome!
-- For commit messages and general style please follow the haproxy project's [CONTRIBUTING guide](https://github.com/haproxy/haproxy/blob/master/CONTRIBUTING) and use that where applicable.
-- Please use `golangci-lint run` from [github.com/golangci/golangci-lint](https://github.com/golangci/golangci-lint) for linting code.
-
-### Discussion
-
-A Github issue is the right place to discuss feature requests, bug reports or any other subject that needs tracking.
-
-To ask questions, get some help or even have a little chat, you can join our #ingress-controller channel in [HAProxy Community Slack](https://slack.haproxy.org).
+### GitHub Actions
+Tests run automatically on push to master/main branches.
 
 ## License
 
-[Apache License 2.0](LICENSE)
+Apache License 2.0

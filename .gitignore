@@ -17,6 +17,7 @@ test/*-results.txt
 test/main
 test/client/http2-client
 test/*.log
+test/*.txt
 
 # Build artifacts
 *.exe

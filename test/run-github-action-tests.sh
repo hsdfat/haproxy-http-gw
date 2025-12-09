@@ -125,20 +125,33 @@ MAX_ATTEMPTS=30
 ATTEMPT=0
 API_BACKEND_FOUND=false
 WEB_BACKEND_FOUND=false
+API_V2_BACKEND_FOUND=false
+WEB_V2_BACKEND_FOUND=false
 
 while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-    BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends 2>/dev/null || echo "")
-
-    if echo "$BACKENDS" | grep -q "api-backend"; then
+    # Check default frontend backends
+    BACKENDS_DEFAULT=$(curl -sf http://localhost:9090/api/frontends/default/backends 2>/dev/null || echo "")
+    if echo "$BACKENDS_DEFAULT" | grep -q "api-backend"; then
         API_BACKEND_FOUND=true
     fi
-
-    if echo "$BACKENDS" | grep -q "web-backend"; then
+    if echo "$BACKENDS_DEFAULT" | grep -q "web-backend"; then
         WEB_BACKEND_FOUND=true
     fi
 
-    if [ "$API_BACKEND_FOUND" = true ] && [ "$WEB_BACKEND_FOUND" = true ]; then
-        print_success "All backends registered successfully"
+    # Check frontend-api backends
+    BACKENDS_API=$(curl -sf http://localhost:9090/api/frontends/frontend-api/backends 2>/dev/null || echo "")
+    if echo "$BACKENDS_API" | grep -q "api-v2-backend"; then
+        API_V2_BACKEND_FOUND=true
+    fi
+
+    # Check frontend-web backends
+    BACKENDS_WEB=$(curl -sf http://localhost:9090/api/frontends/frontend-web/backends 2>/dev/null || echo "")
+    if echo "$BACKENDS_WEB" | grep -q "web-v2-backend"; then
+        WEB_V2_BACKEND_FOUND=true
+    fi
+
+    if [ "$API_BACKEND_FOUND" = true ] && [ "$WEB_BACKEND_FOUND" = true ] && [ "$API_V2_BACKEND_FOUND" = true ] && [ "$WEB_V2_BACKEND_FOUND" = true ]; then
+        print_success "All backends registered successfully across all frontends"
         break
     fi
 
@@ -149,11 +162,24 @@ done
 
 echo ""
 echo "Final backend status:"
+echo ""
+echo "Default frontend backends:"
 BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends)
 echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
 
+echo ""
+echo "Frontend-API backends:"
+BACKENDS=$(curl -sf http://localhost:9090/api/frontends/frontend-api/backends)
+echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
+
+echo ""
+echo "Frontend-Web backends:"
+BACKENDS=$(curl -sf http://localhost:9090/api/frontends/frontend-web/backends)
+echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
+
+# Check all backends
 if [ "$API_BACKEND_FOUND" != true ]; then
-    print_error "api-backend not found in registered backends"
+    print_error "api-backend not found in default frontend"
     echo ""
     echo "Gateway logs:"
     $COMPOSE_CMD logs gateway
@@ -164,71 +190,187 @@ if [ "$API_BACKEND_FOUND" != true ]; then
 fi
 
 if [ "$WEB_BACKEND_FOUND" != true ]; then
-    print_error "web-backend not found in registered backends"
+    print_error "web-backend not found in default frontend"
     exit 1
 fi
 
-print_success "api-backend is registered"
-print_success "web-backend is registered"
-
-# Step 7.5: Configure routes
-print_section "Configure Routes"
-print_info "Configuring gateway routes..."
-if ./scripts/configure-routes.sh; then
-    print_success "Routes configured successfully"
-else
-    print_error "Failed to configure routes"
+if [ "$API_V2_BACKEND_FOUND" != true ]; then
+    print_error "api-v2-backend not found in frontend-api"
+    echo ""
+    echo "Backend server logs:"
+    $COMPOSE_CMD logs api-v2-server-1 api-v2-server-2
     exit 1
 fi
+
+if [ "$WEB_V2_BACKEND_FOUND" != true ]; then
+    print_error "web-v2-backend not found in frontend-web"
+    echo ""
+    echo "Backend server logs:"
+    $COMPOSE_CMD logs web-v2-server-1 web-v2-server-2
+    exit 1
+fi
+
+print_success "api-backend is registered (default frontend)"
+print_success "web-backend is registered (default frontend)"
+print_success "api-v2-backend is registered (frontend-api)"
+print_success "web-v2-backend is registered (frontend-web)"
+print_info "Round-robin load balancing is ready for all frontends"
+
+# Step 7.5: Configure routing rules for new frontends
+print_section "Configure Routing Rules"
+print_info "Configuring routing rules for all frontends..."
+chmod +x scripts/configure-routes.sh
+./scripts/configure-routes.sh
+print_success "Routing rules configured"
 
 # Step 8: Run functional tests
-print_section "Run Functional Tests"
-echo "Running functional tests (including H2C support)..."
+print_section "Run Functional Tests - All Frontends"
+
+# Test default frontend (port 8080)
+echo ""
+echo "Testing default frontend (port 8080)..."
 go run ./client/cmd/test-client/main.go \
     -gateway=http://localhost:8080 \
-    -verbose > functional-results.txt 2>&1
+    -verbose > functional-results-default.txt 2>&1
 
-cat functional-results.txt
+cat functional-results-default.txt
 
-# Check if all tests passed
-if grep -q "Failed: 0" functional-results.txt; then
-    print_success "All functional tests passed"
-    FUNCTIONAL_TESTS_PASSED=true
+if grep -q "Failed: 0" functional-results-default.txt; then
+    print_success "Default frontend functional tests passed"
+    FUNCTIONAL_TESTS_DEFAULT_PASSED=true
 else
-    print_error "Some functional tests failed"
-    FUNCTIONAL_TESTS_PASSED=false
+    print_error "Default frontend functional tests failed"
+    FUNCTIONAL_TESTS_DEFAULT_PASSED=false
 fi
 
-# Step 9: Run performance tests - Low concurrency
+# Test frontend-api (port 8081)
+echo ""
+echo "Testing frontend-api (port 8081)..."
+go run ./client/cmd/test-client/main.go \
+    -gateway=http://localhost:8081 \
+    -verbose > functional-results-api.txt 2>&1
+
+cat functional-results-api.txt
+
+if grep -q "Failed: 0" functional-results-api.txt; then
+    print_success "Frontend-API functional tests passed"
+    FUNCTIONAL_TESTS_API_PASSED=true
+else
+    print_error "Frontend-API functional tests failed"
+    FUNCTIONAL_TESTS_API_PASSED=false
+fi
+
+# Test frontend-web (port 8082)
+echo ""
+echo "Testing frontend-web (port 8082)..."
+go run ./client/cmd/test-client/main.go \
+    -gateway=http://localhost:8082 \
+    -verbose > functional-results-web.txt 2>&1
+
+cat functional-results-web.txt
+
+if grep -q "Failed: 0" functional-results-web.txt; then
+    print_success "Frontend-Web functional tests passed"
+    FUNCTIONAL_TESTS_WEB_PASSED=true
+else
+    print_error "Frontend-Web functional tests failed"
+    FUNCTIONAL_TESTS_WEB_PASSED=false
+fi
+
+# Overall functional test result
+if [ "$FUNCTIONAL_TESTS_DEFAULT_PASSED" = true ] && [ "$FUNCTIONAL_TESTS_API_PASSED" = true ] && [ "$FUNCTIONAL_TESTS_WEB_PASSED" = true ]; then
+    FUNCTIONAL_TESTS_PASSED=true
+    print_success "All functional tests passed across all frontends"
+else
+    FUNCTIONAL_TESTS_PASSED=false
+    print_error "Some functional tests failed"
+fi
+
+# Step 9: Run performance tests - Low concurrency (all frontends)
 print_section "Run Performance Tests - Low Concurrency"
-echo "Running low concurrency performance test (10 workers, 1000 requests)..."
+
+# Test default frontend
+echo ""
+echo "Testing default frontend (port 8080) - Low concurrency..."
 go run ./client/cmd/perf-client/main.go \
     -url=http://localhost:8080 \
     -c=10 \
-    -n=1000 > perf-low-results.txt 2>&1
+    -n=1000 > perf-low-default.txt 2>&1
 
-cat perf-low-results.txt
+cat perf-low-default.txt
 
-# Extract and validate metrics
-if grep -q "Successful:" perf-low-results.txt; then
-    SUCCESS_RATE=$(grep "Successful:" perf-low-results.txt | awk '{print $3}' | tr -d '()%')
-    RPS=$(grep "Requests/sec:" perf-low-results.txt | awk '{print $2}')
-
-    echo "Success rate: ${SUCCESS_RATE}%"
-    echo "Requests/sec: ${RPS}"
-
-    # Validate success rate >= 99%
+if grep -q "Successful:" perf-low-default.txt; then
+    SUCCESS_RATE=$(grep "Successful:" perf-low-default.txt | awk '{print $3}' | tr -d '()%')
+    RPS=$(grep "Requests/sec:" perf-low-default.txt | awk '{print $2}')
     if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
-        print_success "Performance test passed (success rate: ${SUCCESS_RATE}%)"
-        PERF_LOW_PASSED=true
-        PERF_LOW_RPS=$RPS
+        print_success "Default frontend low perf test passed (${SUCCESS_RATE}%, ${RPS} req/s)"
+        PERF_LOW_DEFAULT_PASSED=true
+        PERF_LOW_DEFAULT_RPS=$RPS
     else
-        print_error "Performance test failed (success rate: ${SUCCESS_RATE}% < 99%)"
-        PERF_LOW_PASSED=false
+        print_error "Default frontend low perf test failed (${SUCCESS_RATE}% < 99%)"
+        PERF_LOW_DEFAULT_PASSED=false
     fi
 else
-    print_error "Failed to parse performance results"
+    PERF_LOW_DEFAULT_PASSED=false
+fi
+
+# Test frontend-api
+echo ""
+echo "Testing frontend-api (port 8081) - Low concurrency..."
+go run ./client/cmd/perf-client/main.go \
+    -url=http://localhost:8081 \
+    -c=10 \
+    -n=1000 > perf-low-api.txt 2>&1
+
+cat perf-low-api.txt
+
+if grep -q "Successful:" perf-low-api.txt; then
+    SUCCESS_RATE=$(grep "Successful:" perf-low-api.txt | awk '{print $3}' | tr -d '()%')
+    RPS=$(grep "Requests/sec:" perf-low-api.txt | awk '{print $2}')
+    if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
+        print_success "Frontend-API low perf test passed (${SUCCESS_RATE}%, ${RPS} req/s)"
+        PERF_LOW_API_PASSED=true
+        PERF_LOW_API_RPS=$RPS
+    else
+        print_error "Frontend-API low perf test failed (${SUCCESS_RATE}% < 99%)"
+        PERF_LOW_API_PASSED=false
+    fi
+else
+    PERF_LOW_API_PASSED=false
+fi
+
+# Test frontend-web
+echo ""
+echo "Testing frontend-web (port 8082) - Low concurrency..."
+go run ./client/cmd/perf-client/main.go \
+    -url=http://localhost:8082 \
+    -c=10 \
+    -n=1000 > perf-low-web.txt 2>&1
+
+cat perf-low-web.txt
+
+if grep -q "Successful:" perf-low-web.txt; then
+    SUCCESS_RATE=$(grep "Successful:" perf-low-web.txt | awk '{print $3}' | tr -d '()%')
+    RPS=$(grep "Requests/sec:" perf-low-web.txt | awk '{print $2}')
+    if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
+        print_success "Frontend-Web low perf test passed (${SUCCESS_RATE}%, ${RPS} req/s)"
+        PERF_LOW_WEB_PASSED=true
+        PERF_LOW_WEB_RPS=$RPS
+    else
+        print_error "Frontend-Web low perf test failed (${SUCCESS_RATE}% < 99%)"
+        PERF_LOW_WEB_PASSED=false
+    fi
+else
+    PERF_LOW_WEB_PASSED=false
+fi
+
+# Overall result
+if [ "$PERF_LOW_DEFAULT_PASSED" = true ] && [ "$PERF_LOW_API_PASSED" = true ] && [ "$PERF_LOW_WEB_PASSED" = true ]; then
+    PERF_LOW_PASSED=true
+    print_success "All low concurrency performance tests passed"
+else
     PERF_LOW_PASSED=false
+    print_error "Some low concurrency performance tests failed"
 fi
 
 # Step 10: Run performance tests - Medium concurrency

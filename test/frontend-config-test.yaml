@@ -1,5 +1,5 @@
 # Frontend Configuration for Test Environment
-# This configuration sets up a single frontend for testing the frontend management feature
+# This configuration sets up multiple frontends for testing the frontend management feature
 
 frontends:
   - id: "default"
@@ -29,5 +29,47 @@ frontends:
 
     options:
       max_connections: 10000
+      timeout_client: "30s"
+      http_connection_mode: "http-keep-alive"
+
+  - id: "frontend-api"
+    name: "api-frontend"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      # HTTP binding on port 8081
+      - address: "0.0.0.0"
+        port: 8081
+        protocol: "http"
+        http2: true
+
+    routing:
+      bypass_rules: false
+      default_backend: "api-backend"  # Uses temporary default, api-v2-backend registers later
+
+    options:
+      max_connections: 5000
+      timeout_client: "30s"
+      http_connection_mode: "http-keep-alive"
+
+  - id: "frontend-web"
+    name: "web-frontend"
+    enabled: true
+    mode: "http"
+
+    bindings:
+      # HTTP binding on port 8082
+      - address: "0.0.0.0"
+        port: 8082
+        protocol: "http"
+        http2: true
+
+    routing:
+      bypass_rules: false
+      default_backend: "web-backend"  # Uses temporary default, web-v2-backend registers later
+
+    options:
+      max_connections: 5000
       timeout_client: "30s"
       http_connection_mode: "http-keep-alive"

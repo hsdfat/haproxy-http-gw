@@ -6,7 +6,9 @@ services:
       dockerfile: test/Dockerfile.gateway
     container_name: http-gateway
     ports:
-      - "8080:8080"   # HTTP
+      - "8080:8080"   # HTTP - default frontend
+      - "8081:8081"   # HTTP - frontend-api
+      - "8082:8082"   # HTTP - frontend-web
       - "8443:8443"   # HTTPS
       - "9090:9090"   # API/Stats
     volumes:
@@ -121,6 +123,84 @@ services:
       - SERVER_PORT=9000
       - BACKEND_NAME=web-backend
       - GATEWAY_URL=http://gateway:9090
+      - ENABLE_HTTP2=true
+    networks:
+      - gateway-net
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  # API V2 Backend Servers (for frontend-api)
+  api-v2-server-1:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend
+    container_name: api-v2-server-1
+    environment:
+      - SERVER_NAME=api-v2-server-1
+      # SERVER_IP is auto-detected from eth0 interface
+      - SERVER_PORT=9000
+      - BACKEND_NAME=api-v2-backend
+      - GATEWAY_URL=http://gateway:9090
+      - FRONTEND_ID=frontend-api
+      - ENABLE_HTTP2=true
+    networks:
+      - gateway-net
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  api-v2-server-2:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend
+    container_name: api-v2-server-2
+    environment:
+      - SERVER_NAME=api-v2-server-2
+      # SERVER_IP is auto-detected from eth0 interface
+      - SERVER_PORT=9000
+      - BACKEND_NAME=api-v2-backend
+      - GATEWAY_URL=http://gateway:9090
+      - FRONTEND_ID=frontend-api
+      - ENABLE_HTTP2=true
+    networks:
+      - gateway-net
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  # Web V2 Backend Servers (for frontend-web)
+  web-v2-server-1:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend
+    container_name: web-v2-server-1
+    environment:
+      - SERVER_NAME=web-v2-server-1
+      # SERVER_IP is auto-detected from eth0 interface
+      - SERVER_PORT=9000
+      - BACKEND_NAME=web-v2-backend
+      - GATEWAY_URL=http://gateway:9090
+      - FRONTEND_ID=frontend-web
+      - ENABLE_HTTP2=true
+    networks:
+      - gateway-net
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+  web-v2-server-2:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.backend
+    container_name: web-v2-server-2
+    environment:
+      - SERVER_NAME=web-v2-server-2
+      # SERVER_IP is auto-detected from eth0 interface
+      - SERVER_PORT=9000
+      - BACKEND_NAME=web-v2-backend
+      - GATEWAY_URL=http://gateway:9090
+      - FRONTEND_ID=frontend-web
       - ENABLE_HTTP2=true
     networks:
       - gateway-net

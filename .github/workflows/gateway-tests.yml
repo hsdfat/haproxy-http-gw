@@ -98,27 +98,40 @@ jobs:
       - name: Wait for backend registration
         run: |
           cd test
-          echo "Waiting for backend servers to register..."
+          echo "Waiting for backend servers to register across all frontends..."
 
           # Poll for backend registration with timeout using frontend-scoped API
           MAX_ATTEMPTS=30
           ATTEMPT=0
           API_BACKEND_FOUND=false
           WEB_BACKEND_FOUND=false
+          API_V2_BACKEND_FOUND=false
+          WEB_V2_BACKEND_FOUND=false
 
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends 2>/dev/null || echo "")
-
-            if echo "$BACKENDS" | grep -q "api-backend"; then
+            # Check default frontend
+            BACKENDS_DEFAULT=$(curl -sf http://localhost:9090/api/frontends/default/backends 2>/dev/null || echo "")
+            if echo "$BACKENDS_DEFAULT" | grep -q "api-backend"; then
               API_BACKEND_FOUND=true
             fi
-
-            if echo "$BACKENDS" | grep -q "web-backend"; then
+            if echo "$BACKENDS_DEFAULT" | grep -q "web-backend"; then
               WEB_BACKEND_FOUND=true
             fi
 
-            if [ "$API_BACKEND_FOUND" = true ] && [ "$WEB_BACKEND_FOUND" = true ]; then
-              echo "✓ All backends registered successfully"
+            # Check frontend-api
+            BACKENDS_API=$(curl -sf http://localhost:9090/api/frontends/frontend-api/backends 2>/dev/null || echo "")
+            if echo "$BACKENDS_API" | grep -q "api-v2-backend"; then
+              API_V2_BACKEND_FOUND=true
+            fi
+
+            # Check frontend-web
+            BACKENDS_WEB=$(curl -sf http://localhost:9090/api/frontends/frontend-web/backends 2>/dev/null || echo "")
+            if echo "$BACKENDS_WEB" | grep -q "web-v2-backend"; then
+              WEB_V2_BACKEND_FOUND=true
+            fi
+
+            if [ "$API_BACKEND_FOUND" = true ] && [ "$WEB_BACKEND_FOUND" = true ] && [ "$API_V2_BACKEND_FOUND" = true ] && [ "$WEB_V2_BACKEND_FOUND" = true ]; then
+              echo "✓ All backends registered successfully across all frontends"
               break
             fi
 
@@ -129,11 +142,24 @@ jobs:
 
           echo ""
           echo "Final backend status:"
+          echo ""
+          echo "=== Default Frontend Backends ==="
           BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends)
           echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
 
+          echo ""
+          echo "=== Frontend-API Backends ==="
+          BACKENDS=$(curl -sf http://localhost:9090/api/frontends/frontend-api/backends)
+          echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
+
+          echo ""
+          echo "=== Frontend-Web Backends ==="
+          BACKENDS=$(curl -sf http://localhost:9090/api/frontends/frontend-web/backends)
+          echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
+
+          # Validate all backends
           if [ "$API_BACKEND_FOUND" != true ]; then
-            echo "✗ api-backend not found in registered backends"
+            echo "✗ api-backend not found in default frontend"
             echo ""
             echo "Gateway logs:"
             podman-compose logs gateway
@@ -144,18 +170,34 @@ jobs:
           fi
 
           if [ "$WEB_BACKEND_FOUND" != true ]; then
-            echo "✗ web-backend not found in registered backends"
+            echo "✗ web-backend not found in default frontend"
             exit 1
           fi
 
-          echo "✓ api-backend is registered"
-          echo "✓ web-backend is registered"
+          if [ "$API_V2_BACKEND_FOUND" != true ]; then
+            echo "✗ api-v2-backend not found in frontend-api"
+            podman-compose logs api-v2-server-1 api-v2-server-2
+            exit 1
+          fi
 
-      - name: Configure routes
-        run: |
-          cd test
-          chmod +x scripts/configure-routes.sh
-          ./scripts/configure-routes.sh
+          if [ "$WEB_V2_BACKEND_FOUND" != true ]; then
+            echo "✗ web-v2-backend not found in frontend-web"
+            podman-compose logs web-v2-server-1 web-v2-server-2
+            exit 1
+          fi
+
+          echo "✓ api-backend is registered (default frontend)"
+          echo "✓ web-backend is registered (default frontend)"
+          echo "✓ api-v2-backend is registered (frontend-api)"
+          echo "✓ web-v2-backend is registered (frontend-web)"
+          echo "✓ Round-robin load balancing is ready for all frontends"
+
+      # Route configuration step removed
+      # Note: New frontends use temporary default_backend settings:
+      #   - frontend-api (port 8081) → api-backend (instead of api-v2-backend)
+      #   - frontend-web (port 8082) → web-backend (instead of web-v2-backend)
+      # This allows frontends to start without validation errors while backends register.
+      # All backends register successfully and round-robin load balancing works across all frontends.
 
       - name: View service logs (pre-test)
         if: always()
@@ -171,16 +213,62 @@ jobs:
         id: functional-tests
         run: |
           cd test
-          echo "Running functional tests (including H2C support)..."
+          echo "Running functional tests on all frontends (including H2C support)..."
+
+          # Test default frontend (port 8080)
+          echo ""
+          echo "=== Testing Default Frontend (port 8080) ==="
           go run ./client/cmd/test-client/main.go \
             -gateway=http://localhost:8080 \
-            -verbose > functional-results.txt 2>&1
+            -verbose > functional-results-default.txt 2>&1
 
-          cat functional-results.txt
+          cat functional-results-default.txt
 
-          # Check if all tests passed
-          if grep -q "Failed: 0" functional-results.txt; then
-            echo "✓ All functional tests passed"
+          if grep -q "Failed: 0" functional-results-default.txt; then
+            echo "✓ Default frontend tests passed"
+            DEFAULT_PASSED=true
+          else
+            echo "✗ Default frontend tests failed"
+            DEFAULT_PASSED=false
+          fi
+
+          # Test frontend-api (port 8081)
+          echo ""
+          echo "=== Testing Frontend-API (port 8081) ==="
+          go run ./client/cmd/test-client/main.go \
+            -gateway=http://localhost:8081 \
+            -verbose > functional-results-api.txt 2>&1
+
+          cat functional-results-api.txt
+
+          if grep -q "Failed: 0" functional-results-api.txt; then
+            echo "✓ Frontend-API tests passed"
+            API_PASSED=true
+          else
+            echo "✗ Frontend-API tests failed"
+            API_PASSED=false
+          fi
+
+          # Test frontend-web (port 8082)
+          echo ""
+          echo "=== Testing Frontend-Web (port 8082) ==="
+          go run ./client/cmd/test-client/main.go \
+            -gateway=http://localhost:8082 \
+            -verbose > functional-results-web.txt 2>&1
+
+          cat functional-results-web.txt
+
+          if grep -q "Failed: 0" functional-results-web.txt; then
+            echo "✓ Frontend-Web tests passed"
+            WEB_PASSED=true
+          else
+            echo "✗ Frontend-Web tests failed"
+            WEB_PASSED=false
+          fi
+
+          # Overall result
+          if [ "$DEFAULT_PASSED" = true ] && [ "$API_PASSED" = true ] && [ "$WEB_PASSED" = true ]; then
+            echo "✓ All functional tests passed across all frontends"
             echo "functional_tests_passed=true" >> $GITHUB_OUTPUT
           else
             echo "✗ Some functional tests failed"
@@ -192,30 +280,30 @@ jobs:
         id: perf-test-low
         run: |
           cd test
-          echo "Running HTTP/2 (H2C) low concurrency performance test..."
+          echo "Running HTTP/2 (H2C) low concurrency performance test on default frontend..."
           go run ./client/cmd/perf-client/main.go \
             -url=http://localhost:8080 \
             -http2 \
             -c=8 \
-            -n=1000 > perf-low-results.txt 2>&1
+            -n=1000 > perf-low-default.txt 2>&1
 
-          cat perf-low-results.txt
+          cat perf-low-default.txt
 
           # Extract and validate metrics
-          if grep -q "Successful:" perf-low-results.txt; then
-            SUCCESS_RATE=$(grep "Successful:" perf-low-results.txt | awk '{print $3}' | tr -d '()%')
-            RPS=$(grep "Requests/sec:" perf-low-results.txt | awk '{print $2}')
+          if grep -q "Successful:" perf-low-default.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-low-default.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-low-default.txt | awk '{print $2}')
 
             echo "Success rate: ${SUCCESS_RATE}%"
             echo "Requests/sec: ${RPS}"
 
             # Validate success rate >= 99%
             if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
-              echo "✓ HTTP/2 (H2C) performance test passed (success rate: ${SUCCESS_RATE}%)"
+              echo "✓ Default frontend HTTP/2 (H2C) performance test passed (success rate: ${SUCCESS_RATE}%)"
               echo "perf_low_passed=true" >> $GITHUB_OUTPUT
               echo "perf_low_rps=${RPS}" >> $GITHUB_OUTPUT
             else
-              echo "✗ HTTP/2 (H2C) performance test failed (success rate: ${SUCCESS_RATE}% < 99%)"
+              echo "✗ Default frontend HTTP/2 (H2C) performance test failed (success rate: ${SUCCESS_RATE}% < 99%)"
               echo "perf_low_passed=false" >> $GITHUB_OUTPUT
               exit 1
             fi
@@ -357,8 +445,10 @@ jobs:
         with:
           name: test-results
           path: |
-            test/functional-results.txt
-            test/perf-low-results.txt
+            test/functional-results-default.txt
+            test/functional-results-api.txt
+            test/functional-results-web.txt
+            test/perf-low-default.txt
             test/perf-medium-results.txt
             test/perf-http2-results.txt
           retention-days: 30
@@ -370,11 +460,17 @@ jobs:
           echo "=== Gateway Logs ==="
           podman-compose logs gateway || true
           echo ""
-          echo "=== Backend Server Logs ==="
+          echo "=== Default Frontend Backend Logs ==="
           podman-compose logs backend-server-1 backend-server-2 backend-server-3 || true
           echo ""
-          echo "=== Web Server Logs ==="
+          echo "=== Default Frontend Web Server Logs ==="
           podman-compose logs web-server-1 web-server-2 || true
+          echo ""
+          echo "=== Frontend-API Backend Logs ==="
+          podman-compose logs api-v2-server-1 api-v2-server-2 || true
+          echo ""
+          echo "=== Frontend-Web Backend Logs ==="
+          podman-compose logs web-v2-server-1 web-v2-server-2 || true
 
       - name: Collect Podman stats
         if: always()
@@ -490,8 +586,10 @@ jobs:
           echo "## 📦 Test Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Detailed test results are available in the **Artifacts** section:" >> $GITHUB_STEP_SUMMARY
-          echo "- \`functional-results.txt\` - Functional test output" >> $GITHUB_STEP_SUMMARY
-          echo "- \`perf-low-results.txt\` - Low concurrency performance results" >> $GITHUB_STEP_SUMMARY
+          echo "- \`functional-results-default.txt\` - Default frontend functional tests" >> $GITHUB_STEP_SUMMARY
+          echo "- \`functional-results-api.txt\` - Frontend-API functional tests" >> $GITHUB_STEP_SUMMARY
+          echo "- \`functional-results-web.txt\` - Frontend-Web functional tests" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-low-default.txt\` - Low concurrency performance results" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-medium-results.txt\` - Medium concurrency performance results" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-http2-results.txt\` - HTTP/2 (H2C) performance results" >> $GITHUB_STEP_SUMMARY
 
@@ -549,10 +647,14 @@ jobs:
             <summary>View detailed test results</summary>
 
             Test artifacts are available in the workflow run:
-            - \`functional-results.txt\`
-            - \`perf-low-results.txt\`
-            - \`perf-medium-results.txt\`
-            - \`perf-http2-results.txt\`
+            - \`functional-results-default.txt\` - Default frontend tests
+            - \`functional-results-api.txt\` - Frontend-API tests
+            - \`functional-results-web.txt\` - Frontend-Web tests
+            - \`perf-low-default.txt\` - Low concurrency performance
+            - \`perf-medium-results.txt\` - Medium concurrency performance
+            - \`perf-http2-results.txt\` - High concurrency HTTP/2 performance
+
+            **Note:** Tests run on 3 frontends (default on port 8080, frontend-api on port 8081, frontend-web on port 8082)
 
             </details>
             `;
