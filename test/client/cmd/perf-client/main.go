@@ -1,9 +1,11 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -122,20 +124,31 @@ func main() {
 	}
 
 	// Create HTTP client
-	transport := &http.Transport{
-		MaxIdleConns:        *concurrency,
-		MaxIdleConnsPerHost: *concurrency,
-		IdleConnTimeout:     90 * time.Second,
-	}
+	var client *http.Client
 
 	if *useHTTP2 {
-		// Enable HTTP/2 support (H2C - HTTP/2 over cleartext)
-		http2.ConfigureTransport(transport)
-	}
-
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   10 * time.Second,
+		// Use HTTP/2 Cleartext (H2C) transport
+		h2Transport := &http2.Transport{
+			AllowHTTP: true, // Allow HTTP URLs
+			DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+				// Return a plain TCP connection instead of TLS for H2C
+				return net.Dial(network, addr)
+			},
+		}
+		client = &http.Client{
+			Transport: h2Transport,
+			Timeout:   10 * time.Second,
+		}
+	} else {
+		transport := &http.Transport{
+			MaxIdleConns:        *concurrency,
+			MaxIdleConnsPerHost: *concurrency,
+			IdleConnTimeout:     90 * time.Second,
+		}
+		client = &http.Client{
+			Transport: transport,
+			Timeout:   10 * time.Second,
+		}
 	}
 
 	// Progress reporting

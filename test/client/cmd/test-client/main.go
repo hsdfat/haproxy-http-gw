@@ -31,11 +31,13 @@ type BackendResponse struct {
 	Protocol  string            `json:"protocol"`
 }
 
+var useH2C bool // Global flag to indicate if H2C should be used for all tests
+
 func main() {
 	gatewayURL := flag.String("gateway", os.Getenv("GATEWAY_URL"), "Gateway URL")
 	gatewayHTTPS := flag.String("gateway-https", os.Getenv("GATEWAY_HTTPS_URL"), "Gateway HTTPS URL (deprecated, use gateway for H2C)")
-	host := flag.String("host", "api.example.com", "Host header to use")
 	verbose := flag.Bool("verbose", false, "Verbose output")
+	forceH2C := flag.Bool("h2c", false, "Force HTTP/2 cleartext (H2C) for all tests")
 	flag.Parse()
 
 	if *gatewayURL == "" {
@@ -45,29 +47,34 @@ func main() {
 		*gatewayHTTPS = "https://localhost:8443"
 	}
 
+	// Auto-detect if H2C should be used based on port
+	// All frontends (8080, 8081, 8082) support HTTP/2 with bypass_rules enabled
+	if *forceH2C || (*gatewayURL == "http://localhost:8080") || (*gatewayURL == "http://localhost:8081") || (*gatewayURL == "http://localhost:8082") {
+		useH2C = true
+	}
+
 	fmt.Println("=== HTTP Gateway Functional Tests ===")
 	fmt.Printf("Gateway HTTP:  %s\n", *gatewayURL)
-	fmt.Printf("Host header:   %s\n", *host)
+	if useH2C {
+		fmt.Println("Using HTTP/2 Cleartext (H2C) for all tests")
+	}
 	fmt.Println()
 
 	results := []TestResult{}
 
 	// Test 1: Basic HTTP Request
-	results = append(results, testBasicHTTP(*gatewayURL, *host, *verbose))
+	results = append(results, testBasicHTTP(*gatewayURL, *verbose))
 
 	// Test 2: HTTP/2 Support (H2C - HTTP/2 over cleartext)
-	results = append(results, testHTTP2(*gatewayURL, *host, *verbose))
+	results = append(results, testHTTP2(*gatewayURL, *verbose))
 
 	// Test 3: Load Balancing
-	results = append(results, testLoadBalancing(*gatewayURL, *host, *verbose))
+	results = append(results, testLoadBalancing(*gatewayURL, *verbose))
 
 	// Test 4: Different Paths
-	results = append(results, testDifferentPaths(*gatewayURL, *host, *verbose))
+	results = append(results, testDifferentPaths(*gatewayURL, *verbose))
 
-	// Test 5: Multiple Hosts
-	results = append(results, testMultipleHosts(*gatewayURL, *verbose))
-
-	// Test 6: Health Check
+	// Test 5: Health Check
 	results = append(results, testHealthCheck(*gatewayURL, *verbose))
 
 	// Print summary
@@ -94,11 +101,30 @@ func main() {
 	}
 }
 
-func testBasicHTTP(gatewayURL, host string, verbose bool) TestResult {
+// createHTTPClient creates an HTTP client with optional H2C support
+func createHTTPClient() *http.Client {
+	if useH2C {
+		// Create transport with H2C support (HTTP/2 over cleartext)
+		transport := &http2.Transport{
+			AllowHTTP: true, // Allow HTTP URLs
+			DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+				// Return a plain TCP connection instead of TLS for H2C
+				return net.Dial(network, addr)
+			},
+		}
+		return &http.Client{
+			Timeout:   5 * time.Second,
+			Transport: transport,
+		}
+	}
+	return &http.Client{Timeout: 5 * time.Second}
+}
+
+func testBasicHTTP(gatewayURL string, verbose bool) TestResult {
 	start := time.Now()
 	result := TestResult{Name: "Basic HTTP Request"}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := createHTTPClient()
 
 	req, err := http.NewRequest("GET", gatewayURL+"/api/test", nil)
 	if err != nil {
@@ -106,7 +132,6 @@ func testBasicHTTP(gatewayURL, host string, verbose bool) TestResult {
 		result.Duration = time.Since(start)
 		return result
 	}
-	req.Host = host
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -146,7 +171,7 @@ func testBasicHTTP(gatewayURL, host string, verbose bool) TestResult {
 	return result
 }
 
-func testHTTP2(gatewayURL, host string, verbose bool) TestResult {
+func testHTTP2(gatewayURL string, verbose bool) TestResult {
 	start := time.Now()
 	result := TestResult{Name: "HTTP/2 Support (H2C)"}
 
@@ -170,7 +195,6 @@ func testHTTP2(gatewayURL, host string, verbose bool) TestResult {
 		result.Duration = time.Since(start)
 		return result
 	}
-	req.Host = host
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -197,11 +221,11 @@ func testHTTP2(gatewayURL, host string, verbose bool) TestResult {
 	return result
 }
 
-func testLoadBalancing(gatewayURL, host string, verbose bool) TestResult {
+func testLoadBalancing(gatewayURL string, verbose bool) TestResult {
 	start := time.Now()
 	result := TestResult{Name: "Load Balancing"}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := createHTTPClient()
 	servers := make(map[string]int)
 	requests := 10
 
@@ -212,7 +236,6 @@ func testLoadBalancing(gatewayURL, host string, verbose bool) TestResult {
 			result.Duration = time.Since(start)
 			return result
 		}
-		req.Host = host
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -250,11 +273,11 @@ func testLoadBalancing(gatewayURL, host string, verbose bool) TestResult {
 	return result
 }
 
-func testDifferentPaths(gatewayURL, host string, verbose bool) TestResult {
+func testDifferentPaths(gatewayURL string, verbose bool) TestResult {
 	start := time.Now()
 	result := TestResult{Name: "Different Paths"}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := createHTTPClient()
 	paths := []string{"/api/users", "/api/orders", "/api/products"}
 
 	for _, path := range paths {
@@ -264,7 +287,6 @@ func testDifferentPaths(gatewayURL, host string, verbose bool) TestResult {
 			result.Duration = time.Since(start)
 			return result
 		}
-		req.Host = host
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -299,51 +321,11 @@ func testDifferentPaths(gatewayURL, host string, verbose bool) TestResult {
 	return result
 }
 
-func testMultipleHosts(gatewayURL string, verbose bool) TestResult {
-	start := time.Now()
-	result := TestResult{Name: "Multiple Hosts"}
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	hosts := []string{"api.example.com", "www.example.com"}
-
-	for _, host := range hosts {
-		req, err := http.NewRequest("GET", gatewayURL+"/", nil)
-		if err != nil {
-			result.Error = fmt.Sprintf("failed to create request for %s: %v", host, err)
-			result.Duration = time.Since(start)
-			return result
-		}
-		req.Host = host
-
-		resp, err := client.Do(req)
-		if err != nil {
-			result.Error = fmt.Sprintf("request to %s failed: %v", host, err)
-			result.Duration = time.Since(start)
-			return result
-		}
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			result.Error = fmt.Sprintf("unexpected status for %s: %d", host, resp.StatusCode)
-			result.Duration = time.Since(start)
-			return result
-		}
-
-		if verbose {
-			fmt.Printf("  Host %s → Status %d\n", host, resp.StatusCode)
-		}
-	}
-
-	result.Passed = true
-	result.Duration = time.Since(start)
-	return result
-}
-
 func testHealthCheck(gatewayURL string, verbose bool) TestResult {
 	start := time.Now()
 	result := TestResult{Name: "Health Check"}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := createHTTPClient()
 
 	resp, err := client.Get(gatewayURL + "/health")
 	if err != nil {

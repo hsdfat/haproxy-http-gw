@@ -294,6 +294,7 @@ echo ""
 echo "Testing default frontend (port 8080) - Low concurrency..."
 go run ./client/cmd/perf-client/main.go \
     -url=http://localhost:8080 \
+    -http2 \
     -c=10 \
     -n=1000 > perf-low-default.txt 2>&1
 
@@ -320,7 +321,8 @@ echo "Testing frontend-api (port 8081) - Low concurrency..."
 go run ./client/cmd/perf-client/main.go \
     -url=http://localhost:8081 \
     -c=10 \
-    -n=1000 > perf-low-api.txt 2>&1
+    -n=1000 \
+    -http2 > perf-low-api.txt 2>&1
 
 cat perf-low-api.txt
 
@@ -345,7 +347,8 @@ echo "Testing frontend-web (port 8082) - Low concurrency..."
 go run ./client/cmd/perf-client/main.go \
     -url=http://localhost:8082 \
     -c=10 \
-    -n=1000 > perf-low-web.txt 2>&1
+    -n=1000 \
+    -http2 > perf-low-web.txt 2>&1
 
 cat perf-low-web.txt
 
@@ -539,9 +542,11 @@ echo "## Performance Metrics"
 echo ""
 echo "| Configuration | Requests/sec |"
 echo "|--------------|--------------|"
-echo "| 10 workers, HTTP/1.1 | ${PERF_LOW_RPS:-N/A} |"
-echo "| 50 workers, HTTP/1.1 | ${PERF_MEDIUM_RPS:-N/A} |"
-echo "| 50 workers, HTTP/2 | ${PERF_HTTP2_RPS:-N/A} |"
+echo "| 10 workers, HTTP/2 (Default) | ${PERF_LOW_DEFAULT_RPS:-N/A} |"
+echo "| 10 workers, HTTP/2 (API) | ${PERF_LOW_API_RPS:-N/A} |"
+echo "| 10 workers, HTTP/2 (Web) | ${PERF_LOW_WEB_RPS:-N/A} |"
+echo "| 50 workers, HTTP/2 | ${PERF_MEDIUM_RPS:-N/A} |"
+echo "| 50 workers, HTTP/2 (High) | ${PERF_HTTP2_RPS:-N/A} |"
 
 # Check if all tests passed
 ALL_PASSED=true
@@ -556,8 +561,12 @@ if [ "$ALL_PASSED" = true ]; then
     print_section "✅ All HTTP Gateway tests passed successfully!"
     echo ""
     print_info "Test artifacts saved:"
-    echo "  - functional-results.txt"
-    echo "  - perf-low-results.txt"
+    echo "  - functional-results-default.txt"
+    echo "  - functional-results-api.txt"
+    echo "  - functional-results-web.txt"
+    echo "  - perf-low-default.txt"
+    echo "  - perf-low-api.txt"
+    echo "  - perf-low-web.txt"
     echo "  - perf-medium-results.txt"
     echo "  - perf-http2-results.txt"
     echo ""

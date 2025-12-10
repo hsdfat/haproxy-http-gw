@@ -4,6 +4,7 @@ services:
     build:
       context: ..
       dockerfile: test/Dockerfile.gateway
+    image: test_gateway
     container_name: http-gateway
     ports:
       - "8080:8080"   # HTTP - default frontend
@@ -22,11 +23,12 @@ services:
       - gateway-net
     restart: unless-stopped
 
-  # Backend API ProviFder (REST API for dynamic backend discovery)
+  # Backend API Provider (REST API for dynamic backend discovery)
   backend-api:
     build:
       context: ..
       dockerfile: test/Dockerfile.backend-api
+    image: test_backend-api
     container_name: backend-api
     ports:
       - "8000:8000"
@@ -37,16 +39,15 @@ services:
     restart: unless-stopped
 
   # Mock Backend Servers (HTTP/2 enabled)
-  # These servers will auto-register with the gateway on startup
-  # SERVER_IP is auto-detected from the container's network interface
+  # All backend servers use the same image for faster builds
   backend-server-1:
+    image: test_backend
     build:
       context: ..
       dockerfile: test/Dockerfile.backend
     container_name: backend-server-1
     environment:
       - SERVER_NAME=backend-server-1
-      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
       - BACKEND_NAME=api-backend
       - GATEWAY_URL=http://gateway:9090
@@ -58,13 +59,10 @@ services:
     restart: unless-stopped
 
   backend-server-2:
-    build:
-      context: ..
-      dockerfile: test/Dockerfile.backend
+    image: test_backend
     container_name: backend-server-2
     environment:
       - SERVER_NAME=backend-server-2
-      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
       - BACKEND_NAME=api-backend
       - GATEWAY_URL=http://gateway:9090
@@ -76,13 +74,10 @@ services:
     restart: unless-stopped
 
   backend-server-3:
-    build:
-      context: ..
-      dockerfile: test/Dockerfile.backend
+    image: test_backend
     container_name: backend-server-3
     environment:
       - SERVER_NAME=backend-server-3
-      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
       - BACKEND_NAME=api-backend
       - GATEWAY_URL=http://gateway:9090
@@ -95,13 +90,10 @@ services:
 
   # Web Backend Servers
   web-server-1:
-    build:
-      context: ..
-      dockerfile: test/Dockerfile.backend
+    image: test_backend
     container_name: web-server-1
     environment:
       - SERVER_NAME=web-server-1
-      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
       - BACKEND_NAME=web-backend
       - GATEWAY_URL=http://gateway:9090
@@ -113,13 +105,10 @@ services:
     restart: unless-stopped
 
   web-server-2:
-    build:
-      context: ..
-      dockerfile: test/Dockerfile.backend
+    image: test_backend
     container_name: web-server-2
     environment:
       - SERVER_NAME=web-server-2
-      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
       - BACKEND_NAME=web-backend
       - GATEWAY_URL=http://gateway:9090
@@ -132,13 +121,10 @@ services:
 
   # API V2 Backend Servers (for frontend-api)
   api-v2-server-1:
-    build:
-      context: ..
-      dockerfile: test/Dockerfile.backend
+    image: test_backend
     container_name: api-v2-server-1
     environment:
       - SERVER_NAME=api-v2-server-1
-      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
       - BACKEND_NAME=api-v2-backend
       - GATEWAY_URL=http://gateway:9090
@@ -151,13 +137,10 @@ services:
     restart: unless-stopped
 
   api-v2-server-2:
-    build:
-      context: ..
-      dockerfile: test/Dockerfile.backend
+    image: test_backend
     container_name: api-v2-server-2
     environment:
       - SERVER_NAME=api-v2-server-2
-      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
       - BACKEND_NAME=api-v2-backend
       - GATEWAY_URL=http://gateway:9090
@@ -171,13 +154,10 @@ services:
 
   # Web V2 Backend Servers (for frontend-web)
   web-v2-server-1:
-    build:
-      context: ..
-      dockerfile: test/Dockerfile.backend
+    image: test_backend
     container_name: web-v2-server-1
     environment:
       - SERVER_NAME=web-v2-server-1
-      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
       - BACKEND_NAME=web-v2-backend
       - GATEWAY_URL=http://gateway:9090
@@ -190,13 +170,10 @@ services:
     restart: unless-stopped
 
   web-v2-server-2:
-    build:
-      context: ..
-      dockerfile: test/Dockerfile.backend
+    image: test_backend
     container_name: web-v2-server-2
     environment:
       - SERVER_NAME=web-v2-server-2
-      # SERVER_IP is auto-detected from eth0 interface
       - SERVER_PORT=9000
       - BACKEND_NAME=web-v2-backend
       - GATEWAY_URL=http://gateway:9090
@@ -213,6 +190,7 @@ services:
     build:
       context: ..
       dockerfile: test/Dockerfile.test-client
+    image: test_test-client
     container_name: test-client
     environment:
       - GATEWAY_URL=http://gateway:8080

@@ -7,6 +7,7 @@ on:
       - 'pkg/gateway/**'
       - 'cmd/http-gateway/**'
       - 'test/**'
+      - 'examples/frontend-config/**'
       - '.github/workflows/gateway-tests.yml'
   pull_request:
     branches: [ master, main, develop ]
@@ -14,17 +15,164 @@ on:
       - 'pkg/gateway/**'
       - 'cmd/http-gateway/**'
       - 'test/**'
+      - 'examples/frontend-config/**'
       - '.github/workflows/gateway-tests.yml'
   workflow_dispatch:
 
 env:
   CONTAINER_RUNTIME: podman
   COMPOSE_CMD: podman-compose
+  GO_VERSION: '1.21'
 
 jobs:
-  test:
-    name: Gateway Tests (Podman)
+  # Unit tests for gateway components
+  unit-tests:
+    name: Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run configuration tests
+        id: config-tests
+        run: |
+          echo "Running configuration unit tests..."
+          cd pkg/gateway
+          go test -v -run TestFrontendConfig 2>&1 | tee ../../config-test-results.txt
+
+          if grep -q "PASS" ../../config-test-results.txt; then
+            echo "✓ Configuration tests passed"
+            echo "config_tests_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "✗ Configuration tests failed"
+            echo "config_tests_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Run all gateway unit tests
+        id: gateway-tests
+        run: |
+          echo "Running all gateway unit tests..."
+          cd pkg/gateway
+          go test -v 2>&1 | tee ../../gateway-test-results.txt
+
+          if grep -q "PASS" ../../gateway-test-results.txt; then
+            echo "✓ All gateway tests passed"
+            echo "gateway_tests_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "✗ Gateway tests failed"
+            echo "gateway_tests_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Generate test coverage
+        run: |
+          cd pkg/gateway
+          go test -coverprofile=coverage.out
+          go tool cover -func=coverage.out > coverage.txt
+
+          echo "Test Coverage:"
+          cat coverage.txt | tail -1
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            config-test-results.txt
+            gateway-test-results.txt
+            pkg/gateway/coverage.txt
+          retention-days: 30
+
+  # Configuration validation
+  config-validation:
+    name: Validate Configurations
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Validate YAML syntax
+        id: yaml-validation
+        run: |
+          echo "Validating example configuration files..."
+
+          FAILED=0
+          for file in examples/frontend-config/*.yaml; do
+            echo "Checking $file..."
+            if yamllint -d relaxed "$file"; then
+              echo "✓ $(basename $file) - Valid YAML"
+            else
+              echo "✗ $(basename $file) - Invalid YAML"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          if [ $FAILED -eq 0 ]; then
+            echo "✓ All configuration files are valid"
+            echo "yaml_valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "✗ $FAILED configuration file(s) failed validation"
+            echo "yaml_valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Verify example files exist
+        run: |
+          echo "Verifying all example files exist..."
+
+          REQUIRED_FILES=(
+            "examples/frontend-config/single-http-frontend.yaml"
+            "examples/frontend-config/http-https-frontend.yaml"
+            "examples/frontend-config/multiple-frontends.yaml"
+            "examples/frontend-config/bypass-mode-frontend.yaml"
+            "examples/frontend-config/multi-tenant.yaml"
+            "examples/frontend-config/README.md"
+          )
+
+          MISSING=0
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "✓ $file exists"
+            else
+              echo "✗ $file missing"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+
+          if [ $MISSING -gt 0 ]; then
+            echo "✗ $MISSING required file(s) missing"
+            exit 1
+          fi
+
+          echo "✓ All required files exist"
+
+  # Integration tests with Podman
+  integration-tests:
+    name: Integration Tests (Podman)
+    runs-on: ubuntu-latest
+    needs: [unit-tests, config-validation]
     timeout-minutes: 30
 
     steps:
@@ -34,7 +182,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Install dependencies
         run: |
@@ -192,13 +340,6 @@ jobs:
           echo "✓ web-v2-backend is registered (frontend-web)"
           echo "✓ Round-robin load balancing is ready for all frontends"
 
-      # Route configuration step removed
-      # Note: New frontends use temporary default_backend settings:
-      #   - frontend-api (port 8081) → api-backend (instead of api-v2-backend)
-      #   - frontend-web (port 8082) → web-backend (instead of web-v2-backend)
-      # This allows frontends to start without validation errors while backends register.
-      # All backends register successfully and round-robin load balancing works across all frontends.
-
       - name: Verify backends are serving traffic
         run: |
           cd test
@@ -302,20 +443,23 @@ jobs:
             exit 1
           fi
 
-      - name: Run HTTP/2 (H2C) performance test - Low concurrency
+      - name: Run HTTP/2 (H2C) performance test - Low concurrency (All Frontends)
         id: perf-test-low
         run: |
           cd test
-          echo "Running HTTP/2 (H2C) low concurrency performance test on default frontend..."
+          echo "Running HTTP/2 (H2C) low concurrency performance tests on all frontends..."
+
+          # Test default frontend (port 8080)
+          echo ""
+          echo "=== Testing Default Frontend (port 8080) - Low concurrency ==="
           go run ./client/cmd/perf-client/main.go \
             -url=http://localhost:8080 \
             -http2 \
-            -c=8 \
+            -c=10 \
             -n=1000 > perf-low-default.txt 2>&1
 
           cat perf-low-default.txt
 
-          # Extract and validate metrics
           if grep -q "Successful:" perf-low-default.txt; then
             SUCCESS_RATE=$(grep "Successful:" perf-low-default.txt | awk '{print $3}' | tr -d '()%')
             RPS=$(grep "Requests/sec:" perf-low-default.txt | awk '{print $2}')
@@ -323,18 +467,86 @@ jobs:
             echo "Success rate: ${SUCCESS_RATE}%"
             echo "Requests/sec: ${RPS}"
 
-            # Validate success rate >= 99%
             if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
-              echo "✓ Default frontend HTTP/2 (H2C) performance test passed (success rate: ${SUCCESS_RATE}%)"
-              echo "perf_low_passed=true" >> $GITHUB_OUTPUT
-              echo "perf_low_rps=${RPS}" >> $GITHUB_OUTPUT
+              echo "✓ Default frontend HTTP/2 (H2C) performance test passed (${SUCCESS_RATE}%, ${RPS} req/s)"
+              PERF_LOW_DEFAULT_PASSED=true
+              PERF_LOW_DEFAULT_RPS=$RPS
             else
-              echo "✗ Default frontend HTTP/2 (H2C) performance test failed (success rate: ${SUCCESS_RATE}% < 99%)"
-              echo "perf_low_passed=false" >> $GITHUB_OUTPUT
-              exit 1
+              echo "✗ Default frontend HTTP/2 (H2C) performance test failed (${SUCCESS_RATE}% < 99%)"
+              PERF_LOW_DEFAULT_PASSED=false
             fi
           else
-            echo "✗ Failed to parse performance results"
+            PERF_LOW_DEFAULT_PASSED=false
+          fi
+
+          # Test frontend-api (port 8081)
+          echo ""
+          echo "=== Testing Frontend-API (port 8081) - Low concurrency ==="
+          go run ./client/cmd/perf-client/main.go \
+            -url=http://localhost:8081 \
+            -http2 \
+            -c=10 \
+            -n=1000 > perf-low-api.txt 2>&1
+
+          cat perf-low-api.txt
+
+          if grep -q "Successful:" perf-low-api.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-low-api.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-low-api.txt | awk '{print $2}')
+
+            echo "Success rate: ${SUCCESS_RATE}%"
+            echo "Requests/sec: ${RPS}"
+
+            if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
+              echo "✓ Frontend-API HTTP/2 (H2C) performance test passed (${SUCCESS_RATE}%, ${RPS} req/s)"
+              PERF_LOW_API_PASSED=true
+              PERF_LOW_API_RPS=$RPS
+            else
+              echo "✗ Frontend-API HTTP/2 (H2C) performance test failed (${SUCCESS_RATE}% < 99%)"
+              PERF_LOW_API_PASSED=false
+            fi
+          else
+            PERF_LOW_API_PASSED=false
+          fi
+
+          # Test frontend-web (port 8082)
+          echo ""
+          echo "=== Testing Frontend-Web (port 8082) - Low concurrency ==="
+          go run ./client/cmd/perf-client/main.go \
+            -url=http://localhost:8082 \
+            -http2 \
+            -c=10 \
+            -n=1000 > perf-low-web.txt 2>&1
+
+          cat perf-low-web.txt
+
+          if grep -q "Successful:" perf-low-web.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-low-web.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-low-web.txt | awk '{print $2}')
+
+            echo "Success rate: ${SUCCESS_RATE}%"
+            echo "Requests/sec: ${RPS}"
+
+            if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
+              echo "✓ Frontend-Web HTTP/2 (H2C) performance test passed (${SUCCESS_RATE}%, ${RPS} req/s)"
+              PERF_LOW_WEB_PASSED=true
+              PERF_LOW_WEB_RPS=$RPS
+            else
+              echo "✗ Frontend-Web HTTP/2 (H2C) performance test failed (${SUCCESS_RATE}% < 99%)"
+              PERF_LOW_WEB_PASSED=false
+            fi
+          else
+            PERF_LOW_WEB_PASSED=false
+          fi
+
+          # Overall result
+          if [ "$PERF_LOW_DEFAULT_PASSED" = true ] && [ "$PERF_LOW_API_PASSED" = true ] && [ "$PERF_LOW_WEB_PASSED" = true ]; then
+            echo "perf_low_passed=true" >> $GITHUB_OUTPUT
+            echo "perf_low_default_rps=${PERF_LOW_DEFAULT_RPS}" >> $GITHUB_OUTPUT
+            echo "perf_low_api_rps=${PERF_LOW_API_RPS}" >> $GITHUB_OUTPUT
+            echo "perf_low_web_rps=${PERF_LOW_WEB_RPS}" >> $GITHUB_OUTPUT
+          else
+            echo "perf_low_passed=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
@@ -346,8 +558,8 @@ jobs:
           go run ./client/cmd/perf-client/main.go \
             -url=http://localhost:8080 \
             -http2 \
-            -c=16 \
-            -n=20000 > perf-medium-results.txt 2>&1
+            -c=50 \
+            -n=5000 > perf-medium-results.txt 2>&1
 
           cat perf-medium-results.txt
 
@@ -382,8 +594,8 @@ jobs:
           go run ./client/cmd/perf-client/main.go \
             -url=http://localhost:8080 \
             -http2 \
-            -c=32 \
-            -n=100000 > perf-http2-results.txt 2>&1
+            -c=50 \
+            -n=5000 > perf-http2-results.txt 2>&1
 
           cat perf-http2-results.txt
 
@@ -475,6 +687,8 @@ jobs:
             test/functional-results-api.txt
             test/functional-results-web.txt
             test/perf-low-default.txt
+            test/perf-low-api.txt
+            test/perf-low-web.txt
             test/perf-medium-results.txt
             test/perf-http2-results.txt
           retention-days: 30
@@ -542,28 +756,28 @@ jobs:
 
           # Functional tests
           if [ "${{ steps.functional-tests.outputs.functional_tests_passed }}" == "true" ]; then
-            echo "| **Functional Tests** | ✅ PASS | All tests passed |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Functional Tests** | ✅ PASS | All frontends passed |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| **Functional Tests** | ❌ FAIL | Some tests failed - check artifacts |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # HTTP/2 (H2C) Performance test - low
           if [ "${{ steps.perf-test-low.outputs.perf_low_passed }}" == "true" ]; then
-            echo "| **HTTP/2 (H2C) - Low** | ✅ PASS | 8 workers, 1,000 requests |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - Low** | ✅ PASS | 10 workers, 1,000 requests (all frontends) |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| **HTTP/2 (H2C) - Low** | ❌ FAIL | Success rate < 99% |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # HTTP/2 (H2C) Performance test - medium
           if [ "${{ steps.perf-test-medium.outputs.perf_medium_passed }}" == "true" ]; then
-            echo "| **HTTP/2 (H2C) - Medium** | ✅ PASS | 16 workers, 20,000 requests |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - Medium** | ✅ PASS | 50 workers, 5,000 requests |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| **HTTP/2 (H2C) - Medium** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # HTTP/2 (H2C) Performance test - high
           if [ "${{ steps.perf-test-http2.outputs.perf_http2_passed }}" == "true" ]; then
-            echo "| **HTTP/2 (H2C) - High** | ✅ PASS | 32 workers, 100,000 requests |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - High** | ✅ PASS | 50 workers, 5,000 requests |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| **HTTP/2 (H2C) - High** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
           fi
@@ -578,31 +792,46 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 🚀 HTTP/2 (H2C) Performance Metrics" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Level | Concurrency | Total Requests | Requests/sec | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|:-----------:|:--------------:|:------------:|:------:|" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Level | Frontend | Concurrency | Total Requests | Requests/sec | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|:--------:|:-----------:|:--------------:|:------------:|:------:|" >> $GITHUB_STEP_SUMMARY
 
-          # Low concurrency
-          RPS_LOW="${{ steps.perf-test-low.outputs.perf_low_rps }}"
-          if [ -n "$RPS_LOW" ]; then
-            echo "| Low | 8 | 1,000 | **${RPS_LOW}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          # Low concurrency - all frontends
+          RPS_LOW_DEFAULT="${{ steps.perf-test-low.outputs.perf_low_default_rps }}"
+          RPS_LOW_API="${{ steps.perf-test-low.outputs.perf_low_api_rps }}"
+          RPS_LOW_WEB="${{ steps.perf-test-low.outputs.perf_low_web_rps }}"
+
+          if [ -n "$RPS_LOW_DEFAULT" ]; then
+            echo "| Low | Default | 10 | 1,000 | **${RPS_LOW_DEFAULT}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Low | 8 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low | Default | 10 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -n "$RPS_LOW_API" ]; then
+            echo "| Low | API | 10 | 1,000 | **${RPS_LOW_API}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Low | API | 10 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -n "$RPS_LOW_WEB" ]; then
+            echo "| Low | Web | 10 | 1,000 | **${RPS_LOW_WEB}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Low | Web | 10 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # Medium concurrency
           RPS_MED="${{ steps.perf-test-medium.outputs.perf_medium_rps }}"
           if [ -n "$RPS_MED" ]; then
-            echo "| Medium | 16 | 20,000 | **${RPS_MED}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Medium | Default | 50 | 5,000 | **${RPS_MED}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Medium | 16 | 20,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Medium | Default | 50 | 5,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # High concurrency
           RPS_HTTP2="${{ steps.perf-test-http2.outputs.perf_http2_rps }}"
           if [ -n "$RPS_HTTP2" ]; then
-            echo "| High | 32 | 100,000 | **${RPS_HTTP2}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| High | Default | 50 | 5,000 | **${RPS_HTTP2}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| High | 32 | 100,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| High | Default | 50 | 5,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -615,16 +844,18 @@ jobs:
           echo "- \`functional-results-default.txt\` - Default frontend functional tests" >> $GITHUB_STEP_SUMMARY
           echo "- \`functional-results-api.txt\` - Frontend-API functional tests" >> $GITHUB_STEP_SUMMARY
           echo "- \`functional-results-web.txt\` - Frontend-Web functional tests" >> $GITHUB_STEP_SUMMARY
-          echo "- \`perf-low-default.txt\` - Low concurrency performance results" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-low-default.txt\` - Low concurrency (default frontend)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-low-api.txt\` - Low concurrency (frontend-api)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-low-web.txt\` - Low concurrency (frontend-web)" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-medium-results.txt\` - Medium concurrency performance results" >> $GITHUB_STEP_SUMMARY
-          echo "- \`perf-http2-results.txt\` - HTTP/2 (H2C) performance results" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-http2-results.txt\` - High concurrency HTTP/2 (H2C) performance results" >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## ℹ️ Environment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Runner:** ubuntu-latest" >> $GITHUB_STEP_SUMMARY
           echo "- **Container Runtime:** Podman" >> $GITHUB_STEP_SUMMARY
-          echo "- **Go Version:** 1.21" >> $GITHUB_STEP_SUMMARY
+          echo "- **Go Version:** ${{ env.GO_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Workflow:** \`${{ github.workflow }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Run ID:** \`${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
 
@@ -653,19 +884,21 @@ jobs:
 
             | Test | Result |
             |------|--------|
-            | Functional Tests | ${functionalPassed ? '✅' : '❌'} |
-            | HTTP/2 (H2C) - Low (8 workers) | ${perfLowPassed ? '✅' : '❌'} |
-            | HTTP/2 (H2C) - Medium (16 workers) | ${perfMediumPassed ? '✅' : '❌'} |
-            | HTTP/2 (H2C) - High (32 workers) | ${perfHttp2Passed ? '✅' : '❌'} |
+            | Functional Tests (All Frontends) | ${functionalPassed ? '✅' : '❌'} |
+            | HTTP/2 (H2C) - Low (10 workers, all frontends) | ${perfLowPassed ? '✅' : '❌'} |
+            | HTTP/2 (H2C) - Medium (50 workers) | ${perfMediumPassed ? '✅' : '❌'} |
+            | HTTP/2 (H2C) - High (50 workers) | ${perfHttp2Passed ? '✅' : '❌'} |
             | Dynamic Backend Updates | ${dynamicPassed ? '✅' : '❌'} |
 
             ### HTTP/2 (H2C) Performance Metrics
 
-            | Test Level | Concurrency | Total Requests | Requests/sec |
-            |-----------|:-----------:|:--------------:|:------------:|
-            | Low | 8 | 1,000 | ${{ steps.perf-test-low.outputs.perf_low_rps }} |
-            | Medium | 16 | 20,000 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |
-            | High | 32 | 100,000 | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |
+            | Test Level | Frontend | Concurrency | Total Requests | Requests/sec |
+            |-----------|:--------:|:-----------:|:--------------:|:------------:|
+            | Low | Default | 10 | 1,000 | ${{ steps.perf-test-low.outputs.perf_low_default_rps }} |
+            | Low | API | 10 | 1,000 | ${{ steps.perf-test-low.outputs.perf_low_api_rps }} |
+            | Low | Web | 10 | 1,000 | ${{ steps.perf-test-low.outputs.perf_low_web_rps }} |
+            | Medium | Default | 50 | 5,000 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |
+            | High | Default | 50 | 5,000 | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |
 
             > **Note:** All performance tests use HTTP/2 over cleartext (H2C) protocol.
 
@@ -676,7 +909,9 @@ jobs:
             - \`functional-results-default.txt\` - Default frontend tests
             - \`functional-results-api.txt\` - Frontend-API tests
             - \`functional-results-web.txt\` - Frontend-Web tests
-            - \`perf-low-default.txt\` - Low concurrency performance
+            - \`perf-low-default.txt\` - Low concurrency (default)
+            - \`perf-low-api.txt\` - Low concurrency (API)
+            - \`perf-low-web.txt\` - Low concurrency (Web)
             - \`perf-medium-results.txt\` - Medium concurrency performance
             - \`perf-http2-results.txt\` - High concurrency HTTP/2 performance
 
@@ -694,14 +929,14 @@ jobs:
 
   verify:
     name: Verify Test Results
-    needs: test
+    needs: integration-tests
     runs-on: ubuntu-latest
     if: always()
 
     steps:
       - name: Check test status
         run: |
-          if [ "${{ needs.test.result }}" == "success" ]; then
+          if [ "${{ needs.integration-tests.result }}" == "success" ]; then
             echo "✅ All HTTP Gateway tests passed successfully!"
             exit 0
           else

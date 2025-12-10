@@ -54,6 +54,30 @@ while [ $attempt -lt $max_attempts ]; do
     sleep 1
 done
 
+# Check if bypass_rules is enabled for frontends
+print_info "Checking frontend routing configuration..."
+FRONTENDS=$(curl -sf "$GATEWAY_API/api/frontends" 2>/dev/null || echo "[]")
+
+# Check if all frontends have bypass_rules enabled
+BYPASS_ENABLED=true
+for frontend_id in default frontend-api frontend-web; do
+    FRONTEND_INFO=$(curl -sf "$GATEWAY_API/api/frontends/$frontend_id" 2>/dev/null || echo "{}")
+    if ! echo "$FRONTEND_INFO" | grep -q '"bypass_rules":true'; then
+        BYPASS_ENABLED=false
+        break
+    fi
+done
+
+if [ "$BYPASS_ENABLED" = true ]; then
+    print_success "All frontends have bypass_rules enabled - routing via default_backend only"
+    print_info "Skipping ACL route configuration (not needed with bypass_rules=true)"
+    echo ""
+    print_success "All routes configured successfully for all frontends"
+    exit 0
+fi
+
+print_info "Bypass mode not enabled - configuring ACL routing rules..."
+
 # Function to add a route to a frontend
 add_route() {
     local frontend_id=$1

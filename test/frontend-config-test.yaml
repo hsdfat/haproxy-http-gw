@@ -24,7 +24,7 @@ frontends:
       #   cert_dir: "/etc/haproxy/certs"
 
     routing:
-      bypass_rules: false
+      bypass_rules: true
       default_backend: "api-backend"
 
     options:
@@ -45,8 +45,8 @@ frontends:
         http2: true
 
     routing:
-      bypass_rules: false
-      default_backend: "api-backend"  # Uses temporary default, api-v2-backend registers later
+      bypass_rules: true
+      default_backend: "api-v2-backend"  # Forward all traffic to api-v2-backend
 
     options:
       max_connections: 5000
@@ -66,8 +66,8 @@ frontends:
         http2: true
 
     routing:
-      bypass_rules: false
-      default_backend: "web-backend"  # Uses temporary default, web-v2-backend registers later
+      bypass_rules: true
+      default_backend: "web-v2-backend"  # Forward all traffic to web-v2-backend
 
     options:
       max_connections: 5000
