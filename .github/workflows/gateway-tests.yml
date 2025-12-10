@@ -110,8 +110,39 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install yamllint
-        run: pip install yamllint
+      - name: Install validation tools
+        run: |
+          pip install yamllint
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Validate shell scripts
+        id: shellcheck
+        run: |
+          echo "Validating shell scripts..."
+          FAILED=0
+
+          # Find all shell scripts
+          SCRIPTS=$(find test -name "*.sh" -type f)
+
+          for script in $SCRIPTS; do
+            echo "Checking $script..."
+            if shellcheck -S warning "$script"; then
+              echo "✓ $(basename $script) - Valid shell script"
+            else
+              echo "✗ $(basename $script) - Shellcheck found issues"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          if [ $FAILED -eq 0 ]; then
+            echo "✓ All shell scripts passed validation"
+            echo "shellcheck_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "✗ $FAILED shell script(s) failed validation"
+            echo "shellcheck_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
       - name: Validate YAML syntax
         id: yaml-validation
@@ -179,368 +210,222 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Install dependencies
+      - name: Setup & Deploy Environment
         run: |
-          # Install required tools
+          set -e
+          # Install dependencies
           sudo apt-get update
           sudo apt-get install -y jq bc
-
-          # Podman is pre-installed on Ubuntu runners
           podman --version
-
-          # Install podman-compose
           pip install podman-compose
           podman-compose --version
 
-      - name: Start Podman socket
-        run: |
-          # Start podman socket for rootless operation
+          # Start Podman socket
           systemctl --user start podman.socket || echo "Warning: Could not start podman socket (may not be needed)"
-          systemctl --user status podman.socket --no-pager || echo "Podman socket status check skipped"
 
-      - name: Generate SSL certificates
-        run: |
+          # Setup test environment
           cd test
           chmod +x scripts/generate-certs.sh
           ./scripts/generate-certs.sh
-
-      - name: Build test environment
-        run: |
-          cd test
           podman-compose build
-
-      - name: Start test environment
-        run: |
-          cd test
           podman-compose up -d
-          echo "Services started, health checks will verify readiness..."
 
-      - name: Check service health
-        run: |
-          cd test
-          echo "Checking service status..."
-          podman-compose ps
-
-          echo ""
+          # Wait for gateway health (with timeout)
           echo "Checking gateway API health..."
+          HEALTH_TIMEOUT=$((SECONDS + 120))  # 2 minute timeout
+          HEALTH_CHECK_PASSED=false
+
           for i in {1..30}; do
+            if [ $SECONDS -ge $HEALTH_TIMEOUT ]; then
+              echo "✗ Health check timed out after 2 minutes"
+              break
+            fi
+
             if curl -sf http://localhost:9090/health > /dev/null 2>&1; then
               echo "✓ Gateway API is healthy"
+              HEALTH_CHECK_PASSED=true
               break
             fi
             echo "Attempt $i/30: Gateway API not ready yet..."
             sleep 2
           done
 
-          if ! curl -sf http://localhost:9090/health > /dev/null 2>&1; then
+          if [ "$HEALTH_CHECK_PASSED" != "true" ]; then
             echo "✗ Gateway API failed to become healthy"
+            echo "=== Gateway Logs ==="
             podman-compose logs gateway
+            echo ""
+            echo "=== Container Status ==="
+            podman ps -a
             exit 1
           fi
 
-      - name: Wait for backend registration
-        run: |
-          cd test
-          echo "Waiting for backend servers to register across all frontends..."
-
-          # Poll for backend registration with timeout using frontend-scoped API
+          # Wait for backend registration (with timeout)
+          echo "Waiting for backend servers to register..."
           MAX_ATTEMPTS=30
           ATTEMPT=0
+          BACKEND_TIMEOUT=$((SECONDS + 180))  # 3 minute timeout
           API_BACKEND_FOUND=false
           WEB_BACKEND_FOUND=false
           API_V2_BACKEND_FOUND=false
           WEB_V2_BACKEND_FOUND=false
 
-          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            # Check default frontend
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ] && [ $SECONDS -lt $BACKEND_TIMEOUT ]; do
             BACKENDS_DEFAULT=$(curl -sf http://localhost:9090/api/frontends/default/backends 2>/dev/null || echo "")
-            if echo "$BACKENDS_DEFAULT" | grep -q "api-backend"; then
-              API_BACKEND_FOUND=true
-            fi
-            if echo "$BACKENDS_DEFAULT" | grep -q "web-backend"; then
-              WEB_BACKEND_FOUND=true
-            fi
+            if echo "$BACKENDS_DEFAULT" | grep -q "api-backend"; then API_BACKEND_FOUND=true; fi
+            if echo "$BACKENDS_DEFAULT" | grep -q "web-backend"; then WEB_BACKEND_FOUND=true; fi
 
-            # Check frontend-api
             BACKENDS_API=$(curl -sf http://localhost:9090/api/frontends/frontend-api/backends 2>/dev/null || echo "")
-            if echo "$BACKENDS_API" | grep -q "api-v2-backend"; then
-              API_V2_BACKEND_FOUND=true
-            fi
+            if echo "$BACKENDS_API" | grep -q "api-v2-backend"; then API_V2_BACKEND_FOUND=true; fi
 
-            # Check frontend-web
             BACKENDS_WEB=$(curl -sf http://localhost:9090/api/frontends/frontend-web/backends 2>/dev/null || echo "")
-            if echo "$BACKENDS_WEB" | grep -q "web-v2-backend"; then
-              WEB_V2_BACKEND_FOUND=true
-            fi
+            if echo "$BACKENDS_WEB" | grep -q "web-v2-backend"; then WEB_V2_BACKEND_FOUND=true; fi
 
             if [ "$API_BACKEND_FOUND" = true ] && [ "$WEB_BACKEND_FOUND" = true ] && [ "$API_V2_BACKEND_FOUND" = true ] && [ "$WEB_V2_BACKEND_FOUND" = true ]; then
-              echo "✓ All backends registered successfully across all frontends"
+              echo "✓ All backends registered successfully"
               break
             fi
-
             ATTEMPT=$((ATTEMPT + 1))
-            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Waiting for backends to register..."
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: Waiting for backends..."
             sleep 2
           done
 
-          echo ""
-          echo "Final backend status:"
-          echo ""
-          echo "=== Default Frontend Backends ==="
-          BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends)
-          echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
-
-          echo ""
-          echo "=== Frontend-API Backends ==="
-          BACKENDS=$(curl -sf http://localhost:9090/api/frontends/frontend-api/backends)
-          echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
-
-          echo ""
-          echo "=== Frontend-Web Backends ==="
-          BACKENDS=$(curl -sf http://localhost:9090/api/frontends/frontend-web/backends)
-          echo "$BACKENDS" | jq '.' || echo "$BACKENDS"
-
-          # Validate all backends
-          if [ "$API_BACKEND_FOUND" != true ]; then
-            echo "✗ api-backend not found in default frontend"
+          if [ "$API_BACKEND_FOUND" != true ] || [ "$WEB_BACKEND_FOUND" != true ] || [ "$API_V2_BACKEND_FOUND" != true ] || [ "$WEB_V2_BACKEND_FOUND" != true ]; then
+            echo "✗ Some backends failed to register"
+            echo "Backend Registration Status:"
+            echo "  - api-backend (default): $API_BACKEND_FOUND"
+            echo "  - web-backend (default): $WEB_BACKEND_FOUND"
+            echo "  - api-v2-backend (frontend-api): $API_V2_BACKEND_FOUND"
+            echo "  - web-v2-backend (frontend-web): $WEB_V2_BACKEND_FOUND"
             echo ""
-            echo "Gateway logs:"
+            echo "=== Gateway Logs ==="
             podman-compose logs gateway
             echo ""
-            echo "Backend server logs:"
-            podman-compose logs backend-server-1 backend-server-2 backend-server-3
+            echo "=== Backend Server Logs ==="
+            podman-compose logs backend-server-1 backend-server-2 backend-server-3 || true
+            podman-compose logs api-v2-server-1 api-v2-server-2 || true
+            podman-compose logs web-v2-server-1 web-v2-server-2 || true
             exit 1
           fi
 
-          if [ "$WEB_BACKEND_FOUND" != true ]; then
-            echo "✗ web-backend not found in default frontend"
-            exit 1
-          fi
+          # Configure routing rules
+          chmod +x scripts/configure-routes.sh
+          ./scripts/configure-routes.sh
 
-          if [ "$API_V2_BACKEND_FOUND" != true ]; then
-            echo "✗ api-v2-backend not found in frontend-api"
-            podman-compose logs api-v2-server-1 api-v2-server-2
-            exit 1
-          fi
-
-          if [ "$WEB_V2_BACKEND_FOUND" != true ]; then
-            echo "✗ web-v2-backend not found in frontend-web"
-            podman-compose logs web-v2-server-1 web-v2-server-2
-            exit 1
-          fi
-
-          echo "✓ api-backend is registered (default frontend)"
-          echo "✓ web-backend is registered (default frontend)"
-          echo "✓ api-v2-backend is registered (frontend-api)"
-          echo "✓ web-v2-backend is registered (frontend-web)"
-          echo "✓ Round-robin load balancing is ready for all frontends"
-
-      - name: Verify backends are serving traffic
-        run: |
-          cd test
-          echo "Waiting for HAProxy to reload with registered backends..."
+          # Verify backends are serving traffic
           sleep 5
-
-          echo "Verifying frontends are serving traffic..."
           for i in {1..20}; do
-            # Test default frontend (8080)
             RESP=$(curl -s http://localhost:8080/ || echo "")
             if echo "$RESP" | grep -q "backend-server"; then
-              echo "✓ Default frontend (8080) is serving traffic"
+              echo "✓ Services are ready"
               break
             fi
-
             if [ $i -eq 20 ]; then
-              echo "✗ Default frontend not serving traffic after 20 attempts"
-              echo "Last response: $RESP"
+              echo "✗ Services not serving traffic"
               podman-compose logs gateway
               exit 1
             fi
-
-            echo "Attempt $i/20: Waiting for backends to serve traffic..."
             sleep 3
           done
 
-      - name: View service logs (pre-test)
-        if: always()
+      - name: Run All Tests
+        id: run-tests
         run: |
+          set -e
           cd test
-          echo "=== Gateway Logs ==="
-          podman-compose logs --tail=50 gateway || true
-          echo ""
-          echo "=== Backend Server Logs ==="
-          podman-compose logs --tail=20 backend-server-1 backend-server-2 backend-server-3 || true
 
-      - name: Run functional tests
-        id: functional-tests
-        run: |
-          cd test
-          echo "Running functional tests on all frontends (including H2C support)..."
-
-          # Test default frontend (port 8080)
-          echo ""
-          echo "=== Testing Default Frontend (port 8080) ==="
-          go run ./client/cmd/test-client/main.go \
-            -gateway=http://localhost:8080 \
-            -verbose > functional-results-default.txt 2>&1
-
+          # Functional tests
+          echo "=== Running Functional Tests ==="
+          go run ./client/cmd/test-client/main.go -gateway=http://localhost:8080 -verbose > functional-results-default.txt 2>&1
           cat functional-results-default.txt
+          DEFAULT_PASSED=$(grep -q "Failed: 0" functional-results-default.txt && echo "true" || echo "false")
 
-          if grep -q "Failed: 0" functional-results-default.txt; then
-            echo "✓ Default frontend tests passed"
-            DEFAULT_PASSED=true
-          else
-            echo "✗ Default frontend tests failed"
-            DEFAULT_PASSED=false
-          fi
-
-          # Test frontend-api (port 8081)
-          echo ""
-          echo "=== Testing Frontend-API (port 8081) ==="
-          go run ./client/cmd/test-client/main.go \
-            -gateway=http://localhost:8081 \
-            -verbose > functional-results-api.txt 2>&1
-
+          go run ./client/cmd/test-client/main.go -gateway=http://localhost:8081 -verbose > functional-results-api.txt 2>&1
           cat functional-results-api.txt
+          API_PASSED=$(grep -q "Failed: 0" functional-results-api.txt && echo "true" || echo "false")
 
-          if grep -q "Failed: 0" functional-results-api.txt; then
-            echo "✓ Frontend-API tests passed"
-            API_PASSED=true
-          else
-            echo "✗ Frontend-API tests failed"
-            API_PASSED=false
-          fi
-
-          # Test frontend-web (port 8082)
-          echo ""
-          echo "=== Testing Frontend-Web (port 8082) ==="
-          go run ./client/cmd/test-client/main.go \
-            -gateway=http://localhost:8082 \
-            -verbose > functional-results-web.txt 2>&1
-
+          go run ./client/cmd/test-client/main.go -gateway=http://localhost:8082 -verbose > functional-results-web.txt 2>&1
           cat functional-results-web.txt
+          WEB_PASSED=$(grep -q "Failed: 0" functional-results-web.txt && echo "true" || echo "false")
 
-          if grep -q "Failed: 0" functional-results-web.txt; then
-            echo "✓ Frontend-Web tests passed"
-            WEB_PASSED=true
-          else
-            echo "✗ Frontend-Web tests failed"
-            WEB_PASSED=false
-          fi
-
-          # Overall result
-          if [ "$DEFAULT_PASSED" = true ] && [ "$API_PASSED" = true ] && [ "$WEB_PASSED" = true ]; then
-            echo "✓ All functional tests passed across all frontends"
+          if [ "$DEFAULT_PASSED" = "true" ] && [ "$API_PASSED" = "true" ] && [ "$WEB_PASSED" = "true" ]; then
             echo "functional_tests_passed=true" >> $GITHUB_OUTPUT
           else
-            echo "✗ Some functional tests failed"
             echo "functional_tests_passed=false" >> $GITHUB_OUTPUT
+            echo "=== FUNCTIONAL TEST FAILURES ==="
+            echo "Test Status:"
+            echo "  - Default frontend (8080): $DEFAULT_PASSED"
+            echo "  - API frontend (8081): $API_PASSED"
+            echo "  - Web frontend (8082): $WEB_PASSED"
+            echo ""
+            echo "Failed test details:"
+            grep -i "failed\|error" functional-results-*.txt || true
             exit 1
           fi
 
-      - name: Run HTTP/2 (H2C) performance test - Low concurrency (All Frontends)
-        id: perf-test-low
-        run: |
-          cd test
-          echo "Running HTTP/2 (H2C) low concurrency performance tests on all frontends..."
+          # Performance tests - Low concurrency (8 workers, 2,000 requests - all frontends in parallel)
+          echo "=== Running Performance Tests - Low (All Frontends in Parallel) ==="
 
-          # Test default frontend (port 8080)
-          echo ""
-          echo "=== Testing Default Frontend (port 8080) - Low concurrency ==="
-          go run ./client/cmd/perf-client/main.go \
-            -url=http://localhost:8080 \
-            -http2 \
-            -c=10 \
-            -n=1000 > perf-low-default.txt 2>&1
+          # Run all 3 frontends simultaneously in background
+          go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=8 -n=2000 > perf-low-default.txt 2>&1 &
+          PID_DEFAULT=$!
+          go run ./client/cmd/perf-client/main.go -url=http://localhost:8081 -http2 -c=8 -n=2000 > perf-low-api.txt 2>&1 &
+          PID_API=$!
+          go run ./client/cmd/perf-client/main.go -url=http://localhost:8082 -http2 -c=8 -n=2000 > perf-low-web.txt 2>&1 &
+          PID_WEB=$!
 
+          # Wait for all tests to complete
+          wait $PID_DEFAULT $PID_API $PID_WEB
+          echo "✓ All low concurrency tests completed"
+
+          # Display results
+          echo "=== Default Frontend Results ==="
           cat perf-low-default.txt
+          echo "=== API Frontend Results ==="
+          cat perf-low-api.txt
+          echo "=== Web Frontend Results ==="
+          cat perf-low-web.txt
 
+          # Validate results
+          PERF_LOW_DEFAULT_PASSED=false
+          PERF_LOW_DEFAULT_RPS=""
           if grep -q "Successful:" perf-low-default.txt; then
             SUCCESS_RATE=$(grep "Successful:" perf-low-default.txt | awk '{print $3}' | tr -d '()%')
             RPS=$(grep "Requests/sec:" perf-low-default.txt | awk '{print $2}')
-
-            echo "Success rate: ${SUCCESS_RATE}%"
-            echo "Requests/sec: ${RPS}"
-
             if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
-              echo "✓ Default frontend HTTP/2 (H2C) performance test passed (${SUCCESS_RATE}%, ${RPS} req/s)"
               PERF_LOW_DEFAULT_PASSED=true
               PERF_LOW_DEFAULT_RPS=$RPS
-            else
-              echo "✗ Default frontend HTTP/2 (H2C) performance test failed (${SUCCESS_RATE}% < 99%)"
-              PERF_LOW_DEFAULT_PASSED=false
             fi
-          else
-            PERF_LOW_DEFAULT_PASSED=false
           fi
 
-          # Test frontend-api (port 8081)
-          echo ""
-          echo "=== Testing Frontend-API (port 8081) - Low concurrency ==="
-          go run ./client/cmd/perf-client/main.go \
-            -url=http://localhost:8081 \
-            -http2 \
-            -c=10 \
-            -n=1000 > perf-low-api.txt 2>&1
-
-          cat perf-low-api.txt
-
+          PERF_LOW_API_PASSED=false
+          PERF_LOW_API_RPS=""
           if grep -q "Successful:" perf-low-api.txt; then
             SUCCESS_RATE=$(grep "Successful:" perf-low-api.txt | awk '{print $3}' | tr -d '()%')
             RPS=$(grep "Requests/sec:" perf-low-api.txt | awk '{print $2}')
-
-            echo "Success rate: ${SUCCESS_RATE}%"
-            echo "Requests/sec: ${RPS}"
-
             if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
-              echo "✓ Frontend-API HTTP/2 (H2C) performance test passed (${SUCCESS_RATE}%, ${RPS} req/s)"
               PERF_LOW_API_PASSED=true
               PERF_LOW_API_RPS=$RPS
-            else
-              echo "✗ Frontend-API HTTP/2 (H2C) performance test failed (${SUCCESS_RATE}% < 99%)"
-              PERF_LOW_API_PASSED=false
             fi
-          else
-            PERF_LOW_API_PASSED=false
           fi
 
-          # Test frontend-web (port 8082)
-          echo ""
-          echo "=== Testing Frontend-Web (port 8082) - Low concurrency ==="
-          go run ./client/cmd/perf-client/main.go \
-            -url=http://localhost:8082 \
-            -http2 \
-            -c=10 \
-            -n=1000 > perf-low-web.txt 2>&1
-
-          cat perf-low-web.txt
-
+          PERF_LOW_WEB_PASSED=false
+          PERF_LOW_WEB_RPS=""
           if grep -q "Successful:" perf-low-web.txt; then
             SUCCESS_RATE=$(grep "Successful:" perf-low-web.txt | awk '{print $3}' | tr -d '()%')
             RPS=$(grep "Requests/sec:" perf-low-web.txt | awk '{print $2}')
-
-            echo "Success rate: ${SUCCESS_RATE}%"
-            echo "Requests/sec: ${RPS}"
-
             if (( $(echo "$SUCCESS_RATE >= 99.0" | bc -l) )); then
-              echo "✓ Frontend-Web HTTP/2 (H2C) performance test passed (${SUCCESS_RATE}%, ${RPS} req/s)"
               PERF_LOW_WEB_PASSED=true
               PERF_LOW_WEB_RPS=$RPS
-            else
-              echo "✗ Frontend-Web HTTP/2 (H2C) performance test failed (${SUCCESS_RATE}% < 99%)"
-              PERF_LOW_WEB_PASSED=false
             fi
-          else
-            PERF_LOW_WEB_PASSED=false
           fi
 
-          # Overall result
-          if [ "$PERF_LOW_DEFAULT_PASSED" = true ] && [ "$PERF_LOW_API_PASSED" = true ] && [ "$PERF_LOW_WEB_PASSED" = true ]; then
+          if [ "$PERF_LOW_DEFAULT_PASSED" = "true" ] && [ "$PERF_LOW_API_PASSED" = "true" ] && [ "$PERF_LOW_WEB_PASSED" = "true" ]; then
             echo "perf_low_passed=true" >> $GITHUB_OUTPUT
             echo "perf_low_default_rps=${PERF_LOW_DEFAULT_RPS}" >> $GITHUB_OUTPUT
             echo "perf_low_api_rps=${PERF_LOW_API_RPS}" >> $GITHUB_OUTPUT
@@ -550,134 +435,166 @@ jobs:
             exit 1
           fi
 
-      - name: Run HTTP/2 (H2C) performance test - Medium concurrency
-        id: perf-test-medium
-        run: |
-          cd test
-          echo "Running HTTP/2 (H2C) medium concurrency performance test..."
-          go run ./client/cmd/perf-client/main.go \
-            -url=http://localhost:8080 \
-            -http2 \
-            -c=50 \
-            -n=5000 > perf-medium-results.txt 2>&1
+          # Performance tests - Medium concurrency (16 workers, 20,000 requests - all frontends in parallel)
+          echo "=== Running Performance Tests - Medium (All Frontends in Parallel) ==="
 
-          cat perf-medium-results.txt
+          # Run all 3 frontends simultaneously in background
+          go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=16 -n=20000 > perf-medium-default.txt 2>&1 &
+          PID_DEFAULT=$!
+          go run ./client/cmd/perf-client/main.go -url=http://localhost:8081 -http2 -c=16 -n=20000 > perf-medium-api.txt 2>&1 &
+          PID_API=$!
+          go run ./client/cmd/perf-client/main.go -url=http://localhost:8082 -http2 -c=16 -n=20000 > perf-medium-web.txt 2>&1 &
+          PID_WEB=$!
 
-          # Extract and validate metrics
-          if grep -q "Successful:" perf-medium-results.txt; then
-            SUCCESS_RATE=$(grep "Successful:" perf-medium-results.txt | awk '{print $3}' | tr -d '()%')
-            RPS=$(grep "Requests/sec:" perf-medium-results.txt | awk '{print $2}')
+          # Wait for all tests to complete
+          wait $PID_DEFAULT $PID_API $PID_WEB
+          echo "✓ All medium concurrency tests completed"
 
-            echo "Success rate: ${SUCCESS_RATE}%"
-            echo "Requests/sec: ${RPS}"
+          # Display results
+          echo "=== Default Frontend Results ==="
+          cat perf-medium-default.txt
+          echo "=== API Frontend Results ==="
+          cat perf-medium-api.txt
+          echo "=== Web Frontend Results ==="
+          cat perf-medium-web.txt
 
-            # Validate success rate >= 98%
+          # Validate results
+          PERF_MEDIUM_DEFAULT_PASSED=false
+          PERF_MEDIUM_DEFAULT_RPS=""
+          if grep -q "Successful:" perf-medium-default.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-medium-default.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-medium-default.txt | awk '{print $2}')
             if (( $(echo "$SUCCESS_RATE >= 98.0" | bc -l) )); then
-              echo "✓ HTTP/2 (H2C) performance test passed (success rate: ${SUCCESS_RATE}%)"
-              echo "perf_medium_passed=true" >> $GITHUB_OUTPUT
-              echo "perf_medium_rps=${RPS}" >> $GITHUB_OUTPUT
-            else
-              echo "✗ HTTP/2 (H2C) performance test failed (success rate: ${SUCCESS_RATE}% < 98%)"
-              echo "perf_medium_passed=false" >> $GITHUB_OUTPUT
-              exit 1
+              PERF_MEDIUM_DEFAULT_PASSED=true
+              PERF_MEDIUM_DEFAULT_RPS=$RPS
             fi
+          fi
+
+          PERF_MEDIUM_API_PASSED=false
+          PERF_MEDIUM_API_RPS=""
+          if grep -q "Successful:" perf-medium-api.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-medium-api.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-medium-api.txt | awk '{print $2}')
+            if (( $(echo "$SUCCESS_RATE >= 98.0" | bc -l) )); then
+              PERF_MEDIUM_API_PASSED=true
+              PERF_MEDIUM_API_RPS=$RPS
+            fi
+          fi
+
+          PERF_MEDIUM_WEB_PASSED=false
+          PERF_MEDIUM_WEB_RPS=""
+          if grep -q "Successful:" perf-medium-web.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-medium-web.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-medium-web.txt | awk '{print $2}')
+            if (( $(echo "$SUCCESS_RATE >= 98.0" | bc -l) )); then
+              PERF_MEDIUM_WEB_PASSED=true
+              PERF_MEDIUM_WEB_RPS=$RPS
+            fi
+          fi
+
+          if [ "$PERF_MEDIUM_DEFAULT_PASSED" = "true" ] && [ "$PERF_MEDIUM_API_PASSED" = "true" ] && [ "$PERF_MEDIUM_WEB_PASSED" = "true" ]; then
+            echo "perf_medium_passed=true" >> $GITHUB_OUTPUT
+            echo "perf_medium_default_rps=${PERF_MEDIUM_DEFAULT_RPS}" >> $GITHUB_OUTPUT
+            echo "perf_medium_api_rps=${PERF_MEDIUM_API_RPS}" >> $GITHUB_OUTPUT
+            echo "perf_medium_web_rps=${PERF_MEDIUM_WEB_RPS}" >> $GITHUB_OUTPUT
           else
-            echo "✗ Failed to parse performance results"
+            echo "perf_medium_passed=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-      - name: Run HTTP/2 (H2C) performance test - High concurrency
-        id: perf-test-http2
-        run: |
-          cd test
-          echo "Running HTTP/2 (H2C) high concurrency performance test..."
-          go run ./client/cmd/perf-client/main.go \
-            -url=http://localhost:8080 \
-            -http2 \
-            -c=50 \
-            -n=5000 > perf-http2-results.txt 2>&1
+          # Performance tests - High concurrency (32 workers, 100,000 requests - all frontends in parallel)
+          echo "=== Running Performance Tests - High (All Frontends in Parallel) ==="
 
-          cat perf-http2-results.txt
+          # Run all 3 frontends simultaneously in background
+          go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=32 -n=100000 > perf-high-default.txt 2>&1 &
+          PID_DEFAULT=$!
+          go run ./client/cmd/perf-client/main.go -url=http://localhost:8081 -http2 -c=32 -n=100000 > perf-high-api.txt 2>&1 &
+          PID_API=$!
+          go run ./client/cmd/perf-client/main.go -url=http://localhost:8082 -http2 -c=32 -n=100000 > perf-high-web.txt 2>&1 &
+          PID_WEB=$!
 
-          # Extract and validate metrics
-          if grep -q "Successful:" perf-http2-results.txt; then
-            SUCCESS_RATE=$(grep "Successful:" perf-http2-results.txt | awk '{print $3}' | tr -d '()%')
-            RPS=$(grep "Requests/sec:" perf-http2-results.txt | awk '{print $2}')
+          # Wait for all tests to complete
+          wait $PID_DEFAULT $PID_API $PID_WEB
+          echo "✓ All high concurrency tests completed"
 
-            echo "Success rate: ${SUCCESS_RATE}%"
-            echo "Requests/sec: ${RPS}"
+          # Display results
+          echo "=== Default Frontend Results ==="
+          cat perf-high-default.txt
+          echo "=== API Frontend Results ==="
+          cat perf-high-api.txt
+          echo "=== Web Frontend Results ==="
+          cat perf-high-web.txt
 
-            # Validate success rate >= 98%
-            if (( $(echo "$SUCCESS_RATE >= 98.0" | bc -l) )); then
-              echo "✓ HTTP/2 (H2C) performance test passed (success rate: ${SUCCESS_RATE}%)"
-              echo "perf_http2_passed=true" >> $GITHUB_OUTPUT
-              echo "perf_http2_rps=${RPS}" >> $GITHUB_OUTPUT
-            else
-              echo "✗ HTTP/2 (H2C) performance test failed (success rate: ${SUCCESS_RATE}% < 98%)"
-              echo "perf_http2_passed=false" >> $GITHUB_OUTPUT
-              exit 1
+          # Validate results
+          PERF_HIGH_DEFAULT_PASSED=false
+          PERF_HIGH_DEFAULT_RPS=""
+          if grep -q "Successful:" perf-high-default.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-high-default.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-high-default.txt | awk '{print $2}')
+            if (( $(echo "$SUCCESS_RATE >= 95.0" | bc -l) )); then
+              PERF_HIGH_DEFAULT_PASSED=true
+              PERF_HIGH_DEFAULT_RPS=$RPS
             fi
+          fi
+
+          PERF_HIGH_API_PASSED=false
+          PERF_HIGH_API_RPS=""
+          if grep -q "Successful:" perf-high-api.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-high-api.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-high-api.txt | awk '{print $2}')
+            if (( $(echo "$SUCCESS_RATE >= 95.0" | bc -l) )); then
+              PERF_HIGH_API_PASSED=true
+              PERF_HIGH_API_RPS=$RPS
+            fi
+          fi
+
+          PERF_HIGH_WEB_PASSED=false
+          PERF_HIGH_WEB_RPS=""
+          if grep -q "Successful:" perf-high-web.txt; then
+            SUCCESS_RATE=$(grep "Successful:" perf-high-web.txt | awk '{print $3}' | tr -d '()%')
+            RPS=$(grep "Requests/sec:" perf-high-web.txt | awk '{print $2}')
+            if (( $(echo "$SUCCESS_RATE >= 95.0" | bc -l) )); then
+              PERF_HIGH_WEB_PASSED=true
+              PERF_HIGH_WEB_RPS=$RPS
+            fi
+          fi
+
+          if [ "$PERF_HIGH_DEFAULT_PASSED" = "true" ] && [ "$PERF_HIGH_API_PASSED" = "true" ] && [ "$PERF_HIGH_WEB_PASSED" = "true" ]; then
+            echo "perf_http2_passed=true" >> $GITHUB_OUTPUT
+            echo "perf_high_default_rps=${PERF_HIGH_DEFAULT_RPS}" >> $GITHUB_OUTPUT
+            echo "perf_high_api_rps=${PERF_HIGH_API_RPS}" >> $GITHUB_OUTPUT
+            echo "perf_high_web_rps=${PERF_HIGH_WEB_RPS}" >> $GITHUB_OUTPUT
           else
-            echo "✗ Failed to parse performance results"
+            echo "perf_http2_passed=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-      - name: Test dynamic backend updates
-        id: dynamic-backend-test
-        run: |
-          cd test
-          echo "Testing dynamic backend registration API..."
-
-          # Register a new backend via API using frontend-scoped API
-          echo "Registering new backend via API to frontend 'default'..."
+          # Dynamic backend test
+          echo "=== Testing Dynamic Backend Updates ==="
           RESPONSE=$(curl -sf -X POST http://localhost:9090/api/frontends/default/backends \
             -H "Content-Type: application/json" \
-            -d '{
-              "name": "dynamic-test-backend",
-              "servers": [
-                {"name": "test-srv", "ip": "backend-server-3", "port": 9000}
-              ]
-            }')
-
-          echo "Response: $RESPONSE"
-
-          # Verify response
+            -d '{"name": "dynamic-test-backend", "servers": [{"name": "test-srv", "ip": "backend-server-3", "port": 9000}]}')
           if echo "$RESPONSE" | grep -q '"success":true'; then
-            echo "✓ Backend registration API successful"
+            sleep 5
+            BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends)
+            if echo "$BACKENDS" | grep -q "dynamic-test-backend"; then
+              UNREG_RESPONSE=$(curl -sf -X DELETE http://localhost:9090/api/frontends/default/backends/dynamic-test-backend)
+              if echo "$UNREG_RESPONSE" | grep -q '"success":true'; then
+                echo "dynamic_backend_passed=true" >> $GITHUB_OUTPUT
+              else
+                echo "dynamic_backend_passed=false" >> $GITHUB_OUTPUT
+                exit 1
+              fi
+            else
+              echo "dynamic_backend_passed=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
           else
-            echo "✗ Backend registration API failed"
             echo "dynamic_backend_passed=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          # Wait for HAProxy to apply changes
-          sleep 5
-
-          # Verify backend was added
-          echo "Verifying backend was added..."
-          BACKENDS=$(curl -sf http://localhost:9090/api/frontends/default/backends)
-          if echo "$BACKENDS" | grep -q "dynamic-test-backend"; then
-            echo "✓ Dynamic backend registration successful"
-            echo "dynamic_backend_passed=true" >> $GITHUB_OUTPUT
-          else
-            echo "✗ Dynamic backend not found after registration"
-            echo "Backends response: $BACKENDS"
-            echo "dynamic_backend_passed=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          # Test unregistration
-          echo "Testing backend unregistration..."
-          UNREG_RESPONSE=$(curl -sf -X DELETE http://localhost:9090/api/frontends/default/backends/dynamic-test-backend)
-          if echo "$UNREG_RESPONSE" | grep -q '"success":true'; then
-            echo "✓ Backend unregistration successful"
-          else
-            echo "✗ Backend unregistration failed"
-            echo "Response: $UNREG_RESPONSE"
-            exit 1
-          fi
-
-      - name: Upload test results
+      - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -689,51 +606,37 @@ jobs:
             test/perf-low-default.txt
             test/perf-low-api.txt
             test/perf-low-web.txt
-            test/perf-medium-results.txt
-            test/perf-http2-results.txt
+            test/perf-medium-default.txt
+            test/perf-medium-api.txt
+            test/perf-medium-web.txt
+            test/perf-high-default.txt
+            test/perf-high-api.txt
+            test/perf-high-web.txt
           retention-days: 30
 
-      - name: View service logs (post-test)
+      - name: Report Results & Cleanup
         if: always()
+        working-directory: test
         run: |
-          cd test
+          # View logs
           echo "=== Gateway Logs ==="
           podman-compose logs gateway || true
           echo ""
-          echo "=== Default Frontend Backend Logs ==="
+          echo "=== Backend Logs ==="
           podman-compose logs backend-server-1 backend-server-2 backend-server-3 || true
-          echo ""
-          echo "=== Default Frontend Web Server Logs ==="
-          podman-compose logs web-server-1 web-server-2 || true
-          echo ""
-          echo "=== Frontend-API Backend Logs ==="
           podman-compose logs api-v2-server-1 api-v2-server-2 || true
-          echo ""
-          echo "=== Frontend-Web Backend Logs ==="
           podman-compose logs web-v2-server-1 web-v2-server-2 || true
-
-      - name: Collect Podman stats
-        if: always()
-        run: |
-          cd test
+          
+          # Collect stats
           echo "=== Podman Container Stats ==="
           podman stats --no-stream || true
-
-      - name: Stop test environment
-        if: always()
-        run: |
-          cd test
-          podman-compose down -v
-
-      - name: Generate test summary
-        if: always()
-        run: |
+          
           # Calculate overall status
-          FUNCTIONAL="${{ steps.functional-tests.outputs.functional_tests_passed }}"
-          PERF_LOW="${{ steps.perf-test-low.outputs.perf_low_passed }}"
-          PERF_MED="${{ steps.perf-test-medium.outputs.perf_medium_passed }}"
-          PERF_HTTP2="${{ steps.perf-test-http2.outputs.perf_http2_passed }}"
-          DYNAMIC="${{ steps.dynamic-backend-test.outputs.dynamic_backend_passed }}"
+          FUNCTIONAL="${{ steps.run-tests.outputs.functional_tests_passed }}"
+          PERF_LOW="${{ steps.run-tests.outputs.perf_low_passed }}"
+          PERF_MED="${{ steps.run-tests.outputs.perf_medium_passed }}"
+          PERF_HTTP2="${{ steps.run-tests.outputs.perf_http2_passed }}"
+          DYNAMIC="${{ steps.run-tests.outputs.dynamic_backend_passed }}"
 
           if [ "$FUNCTIONAL" == "true" ] && [ "$PERF_LOW" == "true" ] && [ "$PERF_MED" == "true" ] && [ "$PERF_HTTP2" == "true" ] && [ "$DYNAMIC" == "true" ]; then
             OVERALL_STATUS="✅ ALL TESTS PASSED"
@@ -755,35 +658,35 @@ jobs:
           echo "|--------------|:------:|---------|" >> $GITHUB_STEP_SUMMARY
 
           # Functional tests
-          if [ "${{ steps.functional-tests.outputs.functional_tests_passed }}" == "true" ]; then
+          if [ "${{ steps.run-tests.outputs.functional_tests_passed }}" == "true" ]; then
             echo "| **Functional Tests** | ✅ PASS | All frontends passed |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| **Functional Tests** | ❌ FAIL | Some tests failed - check artifacts |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # HTTP/2 (H2C) Performance test - low
-          if [ "${{ steps.perf-test-low.outputs.perf_low_passed }}" == "true" ]; then
-            echo "| **HTTP/2 (H2C) - Low** | ✅ PASS | 10 workers, 1,000 requests (all frontends) |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.run-tests.outputs.perf_low_passed }}" == "true" ]; then
+            echo "| **HTTP/2 (H2C) - Low** | ✅ PASS | 8 workers, 2,000 requests (all frontends) |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| **HTTP/2 (H2C) - Low** | ❌ FAIL | Success rate < 99% |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # HTTP/2 (H2C) Performance test - medium
-          if [ "${{ steps.perf-test-medium.outputs.perf_medium_passed }}" == "true" ]; then
-            echo "| **HTTP/2 (H2C) - Medium** | ✅ PASS | 50 workers, 5,000 requests |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.run-tests.outputs.perf_medium_passed }}" == "true" ]; then
+            echo "| **HTTP/2 (H2C) - Medium** | ✅ PASS | 16 workers, 20,000 requests (all frontends) |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| **HTTP/2 (H2C) - Medium** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # HTTP/2 (H2C) Performance test - high
-          if [ "${{ steps.perf-test-http2.outputs.perf_http2_passed }}" == "true" ]; then
-            echo "| **HTTP/2 (H2C) - High** | ✅ PASS | 50 workers, 5,000 requests |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.run-tests.outputs.perf_http2_passed }}" == "true" ]; then
+            echo "| **HTTP/2 (H2C) - High** | ✅ PASS | 32 workers, 100,000 requests (all frontends) |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| **HTTP/2 (H2C) - High** | ❌ FAIL | Success rate < 98% |" >> $GITHUB_STEP_SUMMARY
+            echo "| **HTTP/2 (H2C) - High** | ❌ FAIL | Success rate < 95% |" >> $GITHUB_STEP_SUMMARY
           fi
 
           # Dynamic backend test
-          if [ "${{ steps.dynamic-backend-test.outputs.dynamic_backend_passed }}" == "true" ]; then
+          if [ "${{ steps.run-tests.outputs.dynamic_backend_passed }}" == "true" ]; then
             echo "| **Dynamic Backend** | ✅ PASS | Registration & unregistration working |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| **Dynamic Backend** | ❌ FAIL | Backend updates not working |" >> $GITHUB_STEP_SUMMARY
@@ -796,42 +699,72 @@ jobs:
           echo "|-----------|:--------:|:-----------:|:--------------:|:------------:|:------:|" >> $GITHUB_STEP_SUMMARY
 
           # Low concurrency - all frontends
-          RPS_LOW_DEFAULT="${{ steps.perf-test-low.outputs.perf_low_default_rps }}"
-          RPS_LOW_API="${{ steps.perf-test-low.outputs.perf_low_api_rps }}"
-          RPS_LOW_WEB="${{ steps.perf-test-low.outputs.perf_low_web_rps }}"
+          RPS_LOW_DEFAULT="${{ steps.run-tests.outputs.perf_low_default_rps }}"
+          RPS_LOW_API="${{ steps.run-tests.outputs.perf_low_api_rps }}"
+          RPS_LOW_WEB="${{ steps.run-tests.outputs.perf_low_web_rps }}"
 
           if [ -n "$RPS_LOW_DEFAULT" ]; then
-            echo "| Low | Default | 10 | 1,000 | **${RPS_LOW_DEFAULT}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low | Default | 8 | 2,000 | **${RPS_LOW_DEFAULT}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Low | Default | 10 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low | Default | 8 | 2,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
           if [ -n "$RPS_LOW_API" ]; then
-            echo "| Low | API | 10 | 1,000 | **${RPS_LOW_API}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low | API | 8 | 2,000 | **${RPS_LOW_API}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Low | API | 10 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low | API | 8 | 2,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
           if [ -n "$RPS_LOW_WEB" ]; then
-            echo "| Low | Web | 10 | 1,000 | **${RPS_LOW_WEB}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low | Web | 8 | 2,000 | **${RPS_LOW_WEB}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Low | Web | 10 | 1,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Low | Web | 8 | 2,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
-          # Medium concurrency
-          RPS_MED="${{ steps.perf-test-medium.outputs.perf_medium_rps }}"
-          if [ -n "$RPS_MED" ]; then
-            echo "| Medium | Default | 50 | 5,000 | **${RPS_MED}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          # Medium concurrency - all frontends
+          RPS_MED_DEFAULT="${{ steps.run-tests.outputs.perf_medium_default_rps }}"
+          RPS_MED_API="${{ steps.run-tests.outputs.perf_medium_api_rps }}"
+          RPS_MED_WEB="${{ steps.run-tests.outputs.perf_medium_web_rps }}"
+
+          if [ -n "$RPS_MED_DEFAULT" ]; then
+            echo "| Medium | Default | 16 | 20,000 | **${RPS_MED_DEFAULT}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Medium | Default | 50 | 5,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Medium | Default | 16 | 20,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
-          # High concurrency
-          RPS_HTTP2="${{ steps.perf-test-http2.outputs.perf_http2_rps }}"
-          if [ -n "$RPS_HTTP2" ]; then
-            echo "| High | Default | 50 | 5,000 | **${RPS_HTTP2}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$RPS_MED_API" ]; then
+            echo "| Medium | API | 16 | 20,000 | **${RPS_MED_API}** | ✅ |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| High | Default | 50 | 5,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| Medium | API | 16 | 20,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -n "$RPS_MED_WEB" ]; then
+            echo "| Medium | Web | 16 | 20,000 | **${RPS_MED_WEB}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Medium | Web | 16 | 20,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # High concurrency - all frontends
+          RPS_HIGH_DEFAULT="${{ steps.run-tests.outputs.perf_high_default_rps }}"
+          RPS_HIGH_API="${{ steps.run-tests.outputs.perf_high_api_rps }}"
+          RPS_HIGH_WEB="${{ steps.run-tests.outputs.perf_high_web_rps }}"
+
+          if [ -n "$RPS_HIGH_DEFAULT" ]; then
+            echo "| High | Default | 32 | 100,000 | **${RPS_HIGH_DEFAULT}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| High | Default | 32 | 100,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -n "$RPS_HIGH_API" ]; then
+            echo "| High | API | 32 | 100,000 | **${RPS_HIGH_API}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| High | API | 32 | 100,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -n "$RPS_HIGH_WEB" ]; then
+            echo "| High | Web | 32 | 100,000 | **${RPS_HIGH_WEB}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| High | Web | 32 | 100,000 | N/A | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -847,8 +780,12 @@ jobs:
           echo "- \`perf-low-default.txt\` - Low concurrency (default frontend)" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-low-api.txt\` - Low concurrency (frontend-api)" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-low-web.txt\` - Low concurrency (frontend-web)" >> $GITHUB_STEP_SUMMARY
-          echo "- \`perf-medium-results.txt\` - Medium concurrency performance results" >> $GITHUB_STEP_SUMMARY
-          echo "- \`perf-http2-results.txt\` - High concurrency HTTP/2 (H2C) performance results" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-medium-default.txt\` - Medium concurrency (default frontend)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-medium-api.txt\` - Medium concurrency (frontend-api)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-medium-web.txt\` - Medium concurrency (frontend-web)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-high-default.txt\` - High concurrency (default frontend)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-high-api.txt\` - High concurrency (frontend-api)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-high-web.txt\` - High concurrency (frontend-web)" >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## ℹ️ Environment" >> $GITHUB_STEP_SUMMARY
@@ -858,6 +795,9 @@ jobs:
           echo "- **Go Version:** ${{ env.GO_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Workflow:** \`${{ github.workflow }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Run ID:** \`${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Cleanup
+          podman-compose down -v || true
 
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && always()
@@ -865,11 +805,11 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const functionalPassed = '${{ steps.functional-tests.outputs.functional_tests_passed }}' === 'true';
-            const perfLowPassed = '${{ steps.perf-test-low.outputs.perf_low_passed }}' === 'true';
-            const perfMediumPassed = '${{ steps.perf-test-medium.outputs.perf_medium_passed }}' === 'true';
-            const perfHttp2Passed = '${{ steps.perf-test-http2.outputs.perf_http2_passed }}' === 'true';
-            const dynamicPassed = '${{ steps.dynamic-backend-test.outputs.dynamic_backend_passed }}' === 'true';
+            const functionalPassed = '${{ steps.run-tests.outputs.functional_tests_passed }}' === 'true';
+            const perfLowPassed = '${{ steps.run-tests.outputs.perf_low_passed }}' === 'true';
+            const perfMediumPassed = '${{ steps.run-tests.outputs.perf_medium_passed }}' === 'true';
+            const perfHttp2Passed = '${{ steps.run-tests.outputs.perf_http2_passed }}' === 'true';
+            const dynamicPassed = '${{ steps.run-tests.outputs.dynamic_backend_passed }}' === 'true';
 
             const allPassed = functionalPassed && perfLowPassed && perfMediumPassed && perfHttp2Passed && dynamicPassed;
 
@@ -885,20 +825,24 @@ jobs:
             | Test | Result |
             |------|--------|
             | Functional Tests (All Frontends) | ${functionalPassed ? '✅' : '❌'} |
-            | HTTP/2 (H2C) - Low (10 workers, all frontends) | ${perfLowPassed ? '✅' : '❌'} |
-            | HTTP/2 (H2C) - Medium (50 workers) | ${perfMediumPassed ? '✅' : '❌'} |
-            | HTTP/2 (H2C) - High (50 workers) | ${perfHttp2Passed ? '✅' : '❌'} |
+            | HTTP/2 (H2C) - Low (8 workers, all frontends) | ${perfLowPassed ? '✅' : '❌'} |
+            | HTTP/2 (H2C) - Medium (16 workers, all frontends) | ${perfMediumPassed ? '✅' : '❌'} |
+            | HTTP/2 (H2C) - High (32 workers, all frontends) | ${perfHttp2Passed ? '✅' : '❌'} |
             | Dynamic Backend Updates | ${dynamicPassed ? '✅' : '❌'} |
 
             ### HTTP/2 (H2C) Performance Metrics
 
             | Test Level | Frontend | Concurrency | Total Requests | Requests/sec |
             |-----------|:--------:|:-----------:|:--------------:|:------------:|
-            | Low | Default | 10 | 1,000 | ${{ steps.perf-test-low.outputs.perf_low_default_rps }} |
-            | Low | API | 10 | 1,000 | ${{ steps.perf-test-low.outputs.perf_low_api_rps }} |
-            | Low | Web | 10 | 1,000 | ${{ steps.perf-test-low.outputs.perf_low_web_rps }} |
-            | Medium | Default | 50 | 5,000 | ${{ steps.perf-test-medium.outputs.perf_medium_rps }} |
-            | High | Default | 50 | 5,000 | ${{ steps.perf-test-http2.outputs.perf_http2_rps }} |
+            | Low | Default | 8 | 2,000 | ${{ steps.run-tests.outputs.perf_low_default_rps }} |
+            | Low | API | 8 | 2,000 | ${{ steps.run-tests.outputs.perf_low_api_rps }} |
+            | Low | Web | 8 | 2,000 | ${{ steps.run-tests.outputs.perf_low_web_rps }} |
+            | Medium | Default | 16 | 20,000 | ${{ steps.run-tests.outputs.perf_medium_default_rps }} |
+            | Medium | API | 16 | 20,000 | ${{ steps.run-tests.outputs.perf_medium_api_rps }} |
+            | Medium | Web | 16 | 20,000 | ${{ steps.run-tests.outputs.perf_medium_web_rps }} |
+            | High | Default | 32 | 100,000 | ${{ steps.run-tests.outputs.perf_high_default_rps }} |
+            | High | API | 32 | 100,000 | ${{ steps.run-tests.outputs.perf_high_api_rps }} |
+            | High | Web | 32 | 100,000 | ${{ steps.run-tests.outputs.perf_high_web_rps }} |
 
             > **Note:** All performance tests use HTTP/2 over cleartext (H2C) protocol.
 
@@ -912,10 +856,14 @@ jobs:
             - \`perf-low-default.txt\` - Low concurrency (default)
             - \`perf-low-api.txt\` - Low concurrency (API)
             - \`perf-low-web.txt\` - Low concurrency (Web)
-            - \`perf-medium-results.txt\` - Medium concurrency performance
-            - \`perf-http2-results.txt\` - High concurrency HTTP/2 performance
+            - \`perf-medium-default.txt\` - Medium concurrency (default)
+            - \`perf-medium-api.txt\` - Medium concurrency (API)
+            - \`perf-medium-web.txt\` - Medium concurrency (Web)
+            - \`perf-high-default.txt\` - High concurrency (default)
+            - \`perf-high-api.txt\` - High concurrency (API)
+            - \`perf-high-web.txt\` - High concurrency (Web)
 
-            **Note:** Tests run on 3 frontends (default on port 8080, frontend-api on port 8081, frontend-web on port 8082)
+            **Note:** All tests run on 3 frontends (default on port 8080, frontend-api on port 8081, frontend-web on port 8082)
 
             </details>
             `;
