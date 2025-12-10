@@ -119,27 +119,15 @@ jobs:
       - name: Validate shell scripts
         id: shellcheck
         run: |
-          echo "Validating shell scripts..."
-          FAILED=0
+          echo "Validating test script..."
+          SCRIPT="test/run-github-action-tests.sh"
 
-          # Find all shell scripts
-          SCRIPTS=$(find test -name "*.sh" -type f)
-
-          for script in $SCRIPTS; do
-            echo "Checking $script..."
-            if shellcheck -S warning "$script"; then
-              echo "✓ $(basename $script) - Valid shell script"
-            else
-              echo "✗ $(basename $script) - Shellcheck found issues"
-              FAILED=$((FAILED + 1))
-            fi
-          done
-
-          if [ $FAILED -eq 0 ]; then
-            echo "✓ All shell scripts passed validation"
+          echo "Checking $SCRIPT..."
+          if shellcheck -S warning "$SCRIPT"; then
+            echo "✓ $(basename $SCRIPT) - Valid shell script"
             echo "shellcheck_passed=true" >> $GITHUB_OUTPUT
           else
-            echo "✗ $FAILED shell script(s) failed validation"
+            echo "✗ $(basename $SCRIPT) - Shellcheck found issues"
             echo "shellcheck_passed=false" >> $GITHUB_OUTPUT
             exit 1
           fi

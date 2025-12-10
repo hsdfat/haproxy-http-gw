@@ -56,7 +56,6 @@ done
 
 # Check if bypass_rules is enabled for frontends
 print_info "Checking frontend routing configuration..."
-FRONTENDS=$(curl -sf "$GATEWAY_API/api/frontends" 2>/dev/null || echo "[]")
 
 # Check if all frontends have bypass_rules enabled
 BYPASS_ENABLED=true

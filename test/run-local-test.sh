@@ -264,7 +264,7 @@ fi
 # Test 5: Test load balancing on frontend-api
 # Note: Without routing rules, tests backend-server-* (api-backend)
 print_info "Test 5: Testing load balancing on frontend-api (port 8081)"
-servers_hit=$(for i in {1..10}; do curl --http2-prior-knowledge -s http://localhost:8081/; done | grep -o "backend-server-[0-9]" | sort -u | wc -l | tr -d ' ')
+servers_hit=$(for _ in {1..10}; do curl --http2-prior-knowledge -s http://localhost:8081/; done | grep -o "backend-server-[0-9]" | sort -u | wc -l | tr -d ' ')
 if [ "$servers_hit" -ge 2 ]; then
     print_success "Frontend-API load balancing is working (hit $servers_hit different servers from api-backend)"
 else
