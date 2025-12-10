@@ -58,7 +58,7 @@ func SetGlobal(global *models.Global, logTargets *models.LogTargets, env Env) {
 		*logTargets = []*models.LogTarget{{
 			Address:  "127.0.0.1",
 			Facility: "local0",
-			Level:    "notice",
+			Level:    "error",
 		}}
 	} else {
 		for _, v := range *logTargets {

@@ -180,15 +180,12 @@ cd pkg/gateway
 if go test -v -run TestFrontendConfig 2>&1 | tee ../../config-test-results.txt; then
     if grep -q "PASS" ../../config-test-results.txt; then
         print_success "Configuration tests passed"
-        CONFIG_TESTS_PASSED=true
     else
         print_error "Configuration tests failed"
-        CONFIG_TESTS_PASSED=false
         exit 1
     fi
 else
     print_error "Configuration tests failed"
-    CONFIG_TESTS_PASSED=false
     exit 1
 fi
 
@@ -197,15 +194,12 @@ print_info "Running all gateway unit tests..."
 if go test -v 2>&1 | tee ../../gateway-test-results.txt; then
     if grep -q "PASS" ../../gateway-test-results.txt; then
         print_success "All gateway tests passed"
-        GATEWAY_TESTS_PASSED=true
     else
         print_error "Gateway tests failed"
-        GATEWAY_TESTS_PASSED=false
         exit 1
     fi
 else
     print_error "Gateway tests failed"
-    GATEWAY_TESTS_PASSED=false
     exit 1
 fi
 
@@ -239,10 +233,8 @@ done
 
 if [ $FAILED -eq 0 ]; then
     print_success "All configuration files are valid"
-    YAML_VALID=true
 else
     print_error "$FAILED configuration file(s) failed validation"
-    YAML_VALID=false
     exit 1
 fi
 

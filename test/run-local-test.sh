@@ -275,7 +275,7 @@ fi
 # Test 6: Test load balancing on frontend-web
 # Note: Without routing rules, tests web-server-* (web-backend)
 print_info "Test 6: Testing load balancing on frontend-web (port 8082)"
-servers_hit=$(for i in {1..10}; do curl --http2-prior-knowledge -s http://localhost:8082/; done | grep -o "web-server-[0-9]" | sort -u | wc -l | tr -d ' ')
+servers_hit=$(for _ in {1..10}; do curl --http2-prior-knowledge -s http://localhost:8082/; done | grep -o "web-server-[0-9]" | sort -u | wc -l | tr -d ' ')
 if [ "$servers_hit" -ge 2 ]; then
     print_success "Frontend-Web load balancing is working (hit $servers_hit different servers from web-backend)"
 else
