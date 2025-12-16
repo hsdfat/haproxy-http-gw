@@ -315,6 +315,7 @@ func (fm *FrontendManager) addRouteToHAProxy(frontendName string, route Route) e
 		logger.Debugf("Could not fetch existing ACLs (may not exist yet): %v", err)
 		existingACLs = models.Acls{}
 	}
+	logger.Infof("existingACLs: %v", existingACLs)
 
 	// Merge new ACLs with existing ones (avoid duplicates based on ACL name)
 	aclMap := make(map[string]*models.ACL)
@@ -335,7 +336,7 @@ func (fm *FrontendManager) addRouteToHAProxy(frontendName string, route Route) e
 	if err := fm.haproxyClient.ACLsReplace("frontend", frontendName, allACLs); err != nil {
 		return fmt.Errorf("failed to update ACLs: %w", err)
 	}
-
+	logger.Infof("allACLs: %v", allACLs)
 	// Get existing backend switching rules to find the next index
 	existingRules, err := fm.haproxyClient.BackendSwitchingRulesGet(frontendName)
 	if err != nil {
@@ -354,7 +355,7 @@ func (fm *FrontendManager) addRouteToHAProxy(frontendName string, route Route) e
 	if err := fm.haproxyClient.BackendSwitchingRuleCreate(nextIndex, frontendName, rule); err != nil {
 		return fmt.Errorf("failed to create backend switching rule: %w", err)
 	}
-
+	logger.Infof("Create Rule: %v", rule)
 	// Commit transaction
 	if err := fm.haproxyClient.APIFinalCommitTransaction(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
