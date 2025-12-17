@@ -417,6 +417,33 @@ if [ "$API_BACKEND_FOUND" != true ] || [ "$WEB_BACKEND_FOUND" != true ] || [ "$A
     exit 1
 fi
 
+# Re-register backends with multiple servers for proper load balancing
+print_section "Re-register Backends with Multiple Servers"
+print_info "Re-registering backends to ensure multi-server configuration..."
+chmod +x scripts/register-all-backends.sh
+./scripts/register-all-backends.sh
+sleep 2
+
+# Verify multi-server registration
+print_info "Verifying multi-server backend configuration..."
+API_BACKEND_COUNT=$(curl -sf http://localhost:9090/api/frontends/default/backends 2>/dev/null | jq -r '.backends["api-backend"].Servers | length' 2>/dev/null || echo "0")
+WEB_BACKEND_COUNT=$(curl -sf http://localhost:9090/api/frontends/default/backends 2>/dev/null | jq -r '.backends["web-backend"].Servers | length' 2>/dev/null || echo "0")
+API_V2_BACKEND_COUNT=$(curl -sf http://localhost:9090/api/frontends/frontend-api/backends 2>/dev/null | jq -r '.backends["api-v2-backend"].Servers | length' 2>/dev/null || echo "0")
+WEB_V2_BACKEND_COUNT=$(curl -sf http://localhost:9090/api/frontends/frontend-web/backends 2>/dev/null | jq -r '.backends["web-v2-backend"].Servers | length' 2>/dev/null || echo "0")
+
+echo "Backend server counts:"
+echo "  - api-backend: $API_BACKEND_COUNT servers (expected: 3)"
+echo "  - web-backend: $WEB_BACKEND_COUNT servers (expected: 2)"
+echo "  - api-v2-backend: $API_V2_BACKEND_COUNT servers (expected: 2)"
+echo "  - web-v2-backend: $WEB_V2_BACKEND_COUNT servers (expected: 2)"
+
+if [ "$API_BACKEND_COUNT" -ge 2 ] && [ "$WEB_BACKEND_COUNT" -ge 2 ] && [ "$API_V2_BACKEND_COUNT" -ge 2 ] && [ "$WEB_V2_BACKEND_COUNT" -ge 2 ]; then
+    print_success "Multi-server backends configured successfully"
+else
+    print_error "Backend configuration incomplete"
+    exit 1
+fi
+
 # Configure routing rules
 print_info "Configuring routing rules..."
 chmod +x scripts/configure-routes.sh
