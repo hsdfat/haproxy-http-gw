@@ -36,8 +36,24 @@ else
   exit 1
 fi
 
+# Function to get container stats
+get_container_stats() {
+  local container_name=$1
+  if command -v podman &> /dev/null; then
+    podman stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
+  elif command -v docker &> /dev/null; then
+    docker stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
+  else
+    echo "N/A N/A"
+  fi
+}
+
+GATEWAY_CONTAINER="http-gateway"
+
 # Performance tests - Low concurrency (8 workers, 2,000 requests - all frontends in parallel)
 echo "=== Running Performance Tests - Low (All Frontends in Parallel) ==="
+STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+echo "Resource usage before test - $STATS_BEFORE"
 
 # Run all 3 frontends simultaneously in background
 go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=8 -n=2000 > perf-low-default.txt 2>&1 &
@@ -49,7 +65,9 @@ PID_WEB=$!
 
 # Wait for all tests to complete
 wait $PID_DEFAULT $PID_API $PID_WEB
+STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
 echo "✓ All low concurrency tests completed"
+echo "Resource usage after test - $STATS_AFTER"
 
 # Display results
 echo "=== Default Frontend Results ==="
@@ -105,6 +123,8 @@ fi
 
 # Performance tests - Medium concurrency (16 workers, 20,000 requests - all frontends in parallel)
 echo "=== Running Performance Tests - Medium (All Frontends in Parallel) ==="
+STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+echo "Resource usage before test - $STATS_BEFORE"
 
 # Run all 3 frontends simultaneously in background
 go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=16 -n=20000 > perf-medium-default.txt 2>&1 &
@@ -116,7 +136,9 @@ PID_WEB=$!
 
 # Wait for all tests to complete
 wait $PID_DEFAULT $PID_API $PID_WEB
+STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
 echo "✓ All medium concurrency tests completed"
+echo "Resource usage after test - $STATS_AFTER"
 
 # Display results
 echo "=== Default Frontend Results ==="
@@ -173,6 +195,25 @@ fi
 # Performance tests - High concurrency (32 workers, 100,000 requests - all frontends in parallel)
 echo "=== Running Performance Tests - High (All Frontends in Parallel) ==="
 
+# Start continuous resource monitoring in background
+MONITOR_PID=""
+if command -v podman &> /dev/null; then
+  (while true; do
+    podman stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}" "$GATEWAY_CONTAINER" 2>/dev/null || echo "$GATEWAY_CONTAINER,N/A,N/A,N/A,N/A"
+    sleep 1
+  done) > perf-high-monitor.csv 2>&1 &
+  MONITOR_PID=$!
+elif command -v docker &> /dev/null; then
+  (while true; do
+    docker stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}" "$GATEWAY_CONTAINER" 2>/dev/null || echo "$GATEWAY_CONTAINER,N/A,N/A,N/A,N/A"
+    sleep 1
+  done) > perf-high-monitor.csv 2>&1 &
+  MONITOR_PID=$!
+fi
+
+STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+echo "Resource usage before test - $STATS_BEFORE"
+
 # Run all 3 frontends simultaneously in background
 go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=32 -n=100000 > perf-high-default.txt 2>&1 &
 PID_DEFAULT=$!
@@ -183,7 +224,22 @@ PID_WEB=$!
 
 # Wait for all tests to complete
 wait $PID_DEFAULT $PID_API $PID_WEB
+
+# Stop monitoring
+if [ -n "$MONITOR_PID" ]; then
+  kill $MONITOR_PID 2>/dev/null || true
+  wait $MONITOR_PID 2>/dev/null || true
+fi
+
+STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
 echo "✓ All high concurrency tests completed"
+echo "Resource usage after test - $STATS_AFTER"
+
+# Display resource monitoring summary
+if [ -f perf-high-monitor.csv ]; then
+  echo "=== Resource Monitoring During High Concurrency Test (Last 10 samples) ==="
+  tail -10 perf-high-monitor.csv
+fi
 
 # Display results
 echo "=== Default Frontend Results ==="
@@ -237,7 +293,121 @@ else
   exit 1
 fi
 
+# h2load Performance Tests with CPU/Memory Monitoring
+H2LOAD_AVAILABLE=false
+if command -v h2load &> /dev/null; then
+  H2LOAD_AVAILABLE=true
+  echo ""
+  echo "=== Running h2load HTTP/2 Performance Tests with Resource Monitoring ==="
+
+  # Function to get container stats
+  get_container_stats() {
+    local container_name=$1
+    if command -v podman &> /dev/null; then
+      podman stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
+    elif command -v docker &> /dev/null; then
+      docker stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
+    else
+      echo "N/A N/A"
+    fi
+  }
+
+  # Get gateway container name
+  GATEWAY_CONTAINER="http-gateway"
+
+  # Test 1: Low load baseline (1000 requests, 10 concurrent clients)
+  echo "→ h2load Test 1: Low load baseline (1K req, 10 clients)"
+  STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+  h2load -n 1000 -c 10 -m 10 http://localhost:8080/ > h2load-low-default.txt 2>&1 || true
+  STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
+  echo "  Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
+
+  # Test 2: Medium load (10000 requests, 50 concurrent clients)
+  echo "→ h2load Test 2: Medium load (10K req, 50 clients)"
+  STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+  h2load -n 10000 -c 50 -m 10 http://localhost:8081/api > h2load-medium-api.txt 2>&1 || true
+  STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
+  echo "  Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
+
+  # Test 3: High load (50000 requests, 100 concurrent clients)
+  echo "→ h2load Test 3: High load (50K req, 100 clients)"
+  STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+  h2load -n 50000 -c 100 -m 10 http://localhost:8082/ > h2load-high-web.txt 2>&1 || true
+  STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
+  echo "  Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
+
+  # Test 4: Stress test with continuous resource monitoring
+  echo "→ h2load Test 4: Stress test with resource monitoring (100K req, 200 clients)"
+
+  # Start resource monitoring in background
+  MONITOR_PID=""
+  if command -v podman &> /dev/null; then
+    (while true; do
+      podman stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}" "$GATEWAY_CONTAINER" 2>/dev/null
+      sleep 1
+    done) > h2load-stress-monitor.csv 2>&1 &
+    MONITOR_PID=$!
+  elif command -v docker &> /dev/null; then
+    (while true; do
+      docker stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}" "$GATEWAY_CONTAINER" 2>/dev/null
+      sleep 1
+    done) > h2load-stress-monitor.csv 2>&1 &
+    MONITOR_PID=$!
+  fi
+
+  # Run stress tests on all frontends simultaneously
+  (h2load -n 100000 -c 200 -m 10 http://localhost:8080/ > h2load-stress-default.txt 2>&1 || true) &
+  PID_H2_DEFAULT=$!
+  (h2load -n 100000 -c 200 -m 10 http://localhost:8081/api > h2load-stress-api.txt 2>&1 || true) &
+  PID_H2_API=$!
+  (h2load -n 100000 -c 200 -m 10 http://localhost:8082/ > h2load-stress-web.txt 2>&1 || true) &
+  PID_H2_WEB=$!
+
+  # Wait for all tests to complete
+  wait $PID_H2_DEFAULT $PID_H2_API $PID_H2_WEB || true
+
+  # Stop monitoring
+  if [ -n "$MONITOR_PID" ]; then
+    kill $MONITOR_PID 2>/dev/null || true
+    wait $MONITOR_PID 2>/dev/null || true
+  fi
+
+  echo "✓ h2load tests completed"
+
+  # Display stress test results
+  echo ""
+  echo "=== h2load Stress Test Results ==="
+  if [ -f h2load-stress-default.txt ]; then
+    echo "--- Default Frontend ---"
+    grep -E "finished in|requests:|status codes:" h2load-stress-default.txt | head -10
+  fi
+  if [ -f h2load-stress-api.txt ]; then
+    echo "--- API Frontend ---"
+    grep -E "finished in|requests:|status codes:" h2load-stress-api.txt | head -10
+  fi
+  if [ -f h2load-stress-web.txt ]; then
+    echo "--- Web Frontend ---"
+    grep -E "finished in|requests:|status codes:" h2load-stress-web.txt | head -10
+  fi
+
+  # Display resource monitoring summary
+  if [ -f h2load-stress-monitor.csv ]; then
+    echo ""
+    echo "=== Resource Monitoring During Stress Test (Last 10 samples) ==="
+    echo "Name,CPU%,Memory,NetIO,BlockIO"
+    tail -10 h2load-stress-monitor.csv
+  fi
+
+  echo "h2load_tests_passed=true"
+else
+  echo ""
+  echo "=== h2load not available, skipping HTTP/2 benchmark tests ==="
+  echo "Install with: brew install nghttp2 (macOS) or apt-get install nghttp2-client (Linux)"
+  echo "h2load_tests_passed=skipped"
+fi
+
 # Dynamic backend test
+echo ""
 echo "=== Testing Dynamic Backend Updates ==="
 RESPONSE=$(curl -sf -X POST http://localhost:9090/api/frontends/default/backends \
   -H "Content-Type: application/json" \

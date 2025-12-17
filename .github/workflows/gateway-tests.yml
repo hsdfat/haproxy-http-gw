@@ -386,8 +386,18 @@ jobs:
             exit 1
           fi
 
+          # Function to get container stats
+          get_container_stats() {
+            local container_name=$1
+            podman stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
+          }
+
+          GATEWAY_CONTAINER="gateway"
+
           # Performance tests - Low concurrency (8 workers, 2,000 requests - all frontends in parallel)
           echo "=== Running Performance Tests - Low (All Frontends in Parallel) ==="
+          STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+          echo "Resource usage before test - $STATS_BEFORE"
 
           # Run all 3 frontends simultaneously in background
           go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=8 -n=2000 > perf-low-default.txt 2>&1 &
@@ -399,7 +409,9 @@ jobs:
 
           # Wait for all tests to complete
           wait $PID_DEFAULT $PID_API $PID_WEB
+          STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
           echo "✓ All low concurrency tests completed"
+          echo "Resource usage after test - $STATS_AFTER"
 
           # Display results
           echo "=== Default Frontend Results ==="
@@ -455,6 +467,8 @@ jobs:
 
           # Performance tests - Medium concurrency (16 workers, 20,000 requests - all frontends in parallel)
           echo "=== Running Performance Tests - Medium (All Frontends in Parallel) ==="
+          STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+          echo "Resource usage before test - $STATS_BEFORE"
 
           # Run all 3 frontends simultaneously in background
           go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=16 -n=20000 > perf-medium-default.txt 2>&1 &
@@ -466,7 +480,9 @@ jobs:
 
           # Wait for all tests to complete
           wait $PID_DEFAULT $PID_API $PID_WEB
+          STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
           echo "✓ All medium concurrency tests completed"
+          echo "Resource usage after test - $STATS_AFTER"
 
           # Display results
           echo "=== Default Frontend Results ==="
@@ -523,6 +539,16 @@ jobs:
           # Performance tests - High concurrency (32 workers, 100,000 requests - all frontends in parallel)
           echo "=== Running Performance Tests - High (All Frontends in Parallel) ==="
 
+          # Start continuous resource monitoring in background
+          (while true; do
+            podman stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}" "$GATEWAY_CONTAINER" 2>/dev/null || echo "$GATEWAY_CONTAINER,N/A,N/A,N/A,N/A"
+            sleep 1
+          done) > perf-high-monitor.csv 2>&1 &
+          MONITOR_PID=$!
+
+          STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+          echo "Resource usage before test - $STATS_BEFORE"
+
           # Run all 3 frontends simultaneously in background
           go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=32 -n=100000 > perf-high-default.txt 2>&1 &
           PID_DEFAULT=$!
@@ -533,7 +559,20 @@ jobs:
 
           # Wait for all tests to complete
           wait $PID_DEFAULT $PID_API $PID_WEB
+
+          # Stop monitoring
+          kill $MONITOR_PID 2>/dev/null || true
+          wait $MONITOR_PID 2>/dev/null || true
+
+          STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
           echo "✓ All high concurrency tests completed"
+          echo "Resource usage after test - $STATS_AFTER"
+
+          # Display resource monitoring summary
+          if [ -f perf-high-monitor.csv ]; then
+            echo "=== Resource Monitoring During High Concurrency Test (Last 10 samples) ==="
+            tail -10 perf-high-monitor.csv
+          fi
 
           # Display results
           echo "=== Default Frontend Results ==="
@@ -587,6 +626,136 @@ jobs:
             exit 1
           fi
 
+          # h2load Performance Tests with CPU/Memory Monitoring
+          echo "=== Installing and Running h2load HTTP/2 Performance Tests ==="
+
+          # Install h2load (part of nghttp2)
+          H2LOAD_AVAILABLE=false
+          sudo apt-get update && sudo apt-get install -y nghttp2-client 2>&1 | grep -v "^Reading\|^Building\|^Unpacking" || true
+
+          if command -v h2load &> /dev/null; then
+            H2LOAD_AVAILABLE=true
+            h2load --version
+
+            # Function to get container stats
+            get_container_stats() {
+              local container_name=$1
+              podman stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
+            }
+
+            GATEWAY_CONTAINER="gateway"
+
+            # Test 1: Low load baseline (1000 requests, 10 concurrent clients)
+            echo "→ h2load Test 1: Low load baseline (1K req, 10 clients)"
+            STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+            h2load -n 1000 -c 10 -m 10 http://localhost:8080/ > h2load-low-default.txt 2>&1 || true
+            STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
+            echo "  Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
+
+            # Extract h2load low results
+            H2LOAD_LOW_RPS=$(grep "requests/s" h2load-low-default.txt | awk '{print $2}' || echo "N/A")
+            H2LOAD_LOW_SUCCESS=$(grep "succeeded" h2load-low-default.txt | awk '{print $1}' || echo "0")
+            echo "h2load_low_rps=${H2LOAD_LOW_RPS}" >> $GITHUB_OUTPUT
+            echo "h2load_low_success=${H2LOAD_LOW_SUCCESS}" >> $GITHUB_OUTPUT
+            cat h2load-low-default.txt
+
+            # Test 2: Medium load (10000 requests, 50 concurrent clients)
+            echo "→ h2load Test 2: Medium load (10K req, 50 clients)"
+            STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+            h2load -n 10000 -c 50 -m 10 http://localhost:8080/ > h2load-medium-default.txt 2>&1 || true
+            STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
+            echo "  Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
+
+            # Extract h2load medium results
+            H2LOAD_MEDIUM_RPS=$(grep "requests/s" h2load-medium-default.txt | awk '{print $2}' || echo "N/A")
+            H2LOAD_MEDIUM_SUCCESS=$(grep "succeeded" h2load-medium-default.txt | awk '{print $1}' || echo "0")
+            echo "h2load_medium_rps=${H2LOAD_MEDIUM_RPS}" >> $GITHUB_OUTPUT
+            echo "h2load_medium_success=${H2LOAD_MEDIUM_SUCCESS}" >> $GITHUB_OUTPUT
+            cat h2load-medium-default.txt
+
+            # Test 3: High load (50000 requests, 100 concurrent clients)
+            echo "→ h2load Test 3: High load (50K req, 100 clients)"
+            STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+            h2load -n 50000 -c 100 -m 10 http://localhost:8080/ > h2load-high-default.txt 2>&1 || true
+            STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
+            echo "  Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
+
+            # Extract h2load high results
+            H2LOAD_HIGH_RPS=$(grep "requests/s" h2load-high-default.txt | awk '{print $2}' || echo "N/A")
+            H2LOAD_HIGH_SUCCESS=$(grep "succeeded" h2load-high-default.txt | awk '{print $1}' || echo "0")
+            echo "h2load_high_rps=${H2LOAD_HIGH_RPS}" >> $GITHUB_OUTPUT
+            echo "h2load_high_success=${H2LOAD_HIGH_SUCCESS}" >> $GITHUB_OUTPUT
+            cat h2load-high-default.txt
+
+            # Test 4: Stress test with continuous resource monitoring
+            echo "→ h2load Test 4: Stress test (100K req, 200 clients) with monitoring"
+
+            # Start continuous monitoring in background
+            (while true; do
+              podman stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}" "$GATEWAY_CONTAINER" 2>/dev/null || echo "$GATEWAY_CONTAINER,N/A,N/A,N/A,N/A"
+              sleep 1
+            done) > h2load-stress-monitor.csv 2>&1 &
+            MONITOR_PID=$!
+
+            # Run stress tests on all frontends simultaneously
+            echo "  Running parallel stress tests on all 3 frontends..."
+            (h2load -n 100000 -c 200 -m 10 http://localhost:8080/ > h2load-stress-default.txt 2>&1 || true) &
+            PID_DEFAULT=$!
+            (h2load -n 100000 -c 200 -m 10 http://localhost:8081/ > h2load-stress-api.txt 2>&1 || true) &
+            PID_API=$!
+            (h2load -n 100000 -c 200 -m 10 http://localhost:8082/ > h2load-stress-web.txt 2>&1 || true) &
+            PID_WEB=$!
+
+            # Wait for all stress tests to complete
+            wait $PID_DEFAULT $PID_API $PID_WEB
+
+            # Stop monitoring
+            kill $MONITOR_PID 2>/dev/null || true
+            wait $MONITOR_PID 2>/dev/null || true
+
+            echo "  Stress tests completed"
+
+            # Extract stress test results
+            H2LOAD_STRESS_DEFAULT_RPS=$(grep "requests/s" h2load-stress-default.txt | awk '{print $2}' || echo "N/A")
+            H2LOAD_STRESS_API_RPS=$(grep "requests/s" h2load-stress-api.txt | awk '{print $2}' || echo "N/A")
+            H2LOAD_STRESS_WEB_RPS=$(grep "requests/s" h2load-stress-web.txt | awk '{print $2}' || echo "N/A")
+
+            echo "h2load_stress_default_rps=${H2LOAD_STRESS_DEFAULT_RPS}" >> $GITHUB_OUTPUT
+            echo "h2load_stress_api_rps=${H2LOAD_STRESS_API_RPS}" >> $GITHUB_OUTPUT
+            echo "h2load_stress_web_rps=${H2LOAD_STRESS_WEB_RPS}" >> $GITHUB_OUTPUT
+
+            echo "=== Stress Test Results ==="
+            echo "Default Frontend:"
+            cat h2load-stress-default.txt
+            echo ""
+            echo "API Frontend:"
+            cat h2load-stress-api.txt
+            echo ""
+            echo "Web Frontend:"
+            cat h2load-stress-web.txt
+            echo ""
+
+            # Summary of resource monitoring
+            if [ -f h2load-stress-monitor.csv ]; then
+              echo "=== Resource Usage During Stress Test ==="
+              echo "Last 10 samples:"
+              tail -10 h2load-stress-monitor.csv
+
+              # Calculate average CPU and memory (if data available)
+              if [ -s h2load-stress-monitor.csv ]; then
+                AVG_CPU=$(awk -F',' 'NR>1 && $2!="N/A" {sum+=$2; count++} END {if(count>0) printf "%.2f", sum/count; else print "N/A"}' h2load-stress-monitor.csv)
+                echo "  Average CPU: ${AVG_CPU}%"
+                echo "h2load_avg_cpu=${AVG_CPU}" >> $GITHUB_OUTPUT
+              fi
+            fi
+
+            echo "h2load_available=true" >> $GITHUB_OUTPUT
+            echo "✓ h2load tests completed successfully"
+          else
+            echo "h2load_available=false" >> $GITHUB_OUTPUT
+            echo "⚠ h2load not available - skipping h2load tests"
+          fi
+
           # Dynamic backend test
           echo "=== Testing Dynamic Backend Updates ==="
           RESPONSE=$(curl -sf -X POST http://localhost:9090/api/frontends/default/backends \
@@ -630,6 +799,14 @@ jobs:
             test/perf-high-default.txt
             test/perf-high-api.txt
             test/perf-high-web.txt
+            test/perf-high-monitor.csv
+            test/h2load-low-default.txt
+            test/h2load-medium-default.txt
+            test/h2load-high-default.txt
+            test/h2load-stress-default.txt
+            test/h2load-stress-api.txt
+            test/h2load-stress-web.txt
+            test/h2load-stress-monitor.csv
           retention-days: 30
 
       - name: Report Results & Cleanup
@@ -788,13 +965,90 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> **Note:** All performance tests use HTTP/2 over cleartext (H2C) protocol." >> $GITHUB_STEP_SUMMARY
 
+          # h2load Performance Metrics
+          if [ "${{ steps.run-tests.outputs.h2load_available }}" == "true" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ⚡ h2load HTTP/2 Performance Benchmarks" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Test Level | Clients | Total Requests | Requests/sec | Successful | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|:-------:|:--------------:|:------------:|:----------:|:------:|" >> $GITHUB_STEP_SUMMARY
+
+            # Low load
+            H2_LOW_RPS="${{ steps.run-tests.outputs.h2load_low_rps }}"
+            H2_LOW_SUCCESS="${{ steps.run-tests.outputs.h2load_low_success }}"
+            if [ -n "$H2_LOW_RPS" ] && [ "$H2_LOW_RPS" != "N/A" ]; then
+              echo "| Low | 10 | 1,000 | **${H2_LOW_RPS}** | ${H2_LOW_SUCCESS} | ✅ |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Low | 10 | 1,000 | N/A | N/A | ⚠️ |" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Medium load
+            H2_MED_RPS="${{ steps.run-tests.outputs.h2load_medium_rps }}"
+            H2_MED_SUCCESS="${{ steps.run-tests.outputs.h2load_medium_success }}"
+            if [ -n "$H2_MED_RPS" ] && [ "$H2_MED_RPS" != "N/A" ]; then
+              echo "| Medium | 50 | 10,000 | **${H2_MED_RPS}** | ${H2_MED_SUCCESS} | ✅ |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Medium | 50 | 10,000 | N/A | N/A | ⚠️ |" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # High load
+            H2_HIGH_RPS="${{ steps.run-tests.outputs.h2load_high_rps }}"
+            H2_HIGH_SUCCESS="${{ steps.run-tests.outputs.h2load_high_success }}"
+            if [ -n "$H2_HIGH_RPS" ] && [ "$H2_HIGH_RPS" != "N/A" ]; then
+              echo "| High | 100 | 50,000 | **${H2_HIGH_RPS}** | ${H2_HIGH_SUCCESS} | ✅ |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| High | 100 | 50,000 | N/A | N/A | ⚠️ |" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔥 Stress Test Results (All Frontends)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Frontend | Clients | Total Requests | Requests/sec | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|:--------:|:-------:|:--------------:|:------------:|:------:|" >> $GITHUB_STEP_SUMMARY
+
+            # Stress test - default
+            H2_STRESS_DEFAULT="${{ steps.run-tests.outputs.h2load_stress_default_rps }}"
+            if [ -n "$H2_STRESS_DEFAULT" ] && [ "$H2_STRESS_DEFAULT" != "N/A" ]; then
+              echo "| Default (8080) | 200 | 100,000 | **${H2_STRESS_DEFAULT}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Default (8080) | 200 | 100,000 | N/A | ⚠️ |" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Stress test - api
+            H2_STRESS_API="${{ steps.run-tests.outputs.h2load_stress_api_rps }}"
+            if [ -n "$H2_STRESS_API" ] && [ "$H2_STRESS_API" != "N/A" ]; then
+              echo "| API (8081) | 200 | 100,000 | **${H2_STRESS_API}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| API (8081) | 200 | 100,000 | N/A | ⚠️ |" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Stress test - web
+            H2_STRESS_WEB="${{ steps.run-tests.outputs.h2load_stress_web_rps }}"
+            if [ -n "$H2_STRESS_WEB" ] && [ "$H2_STRESS_WEB" != "N/A" ]; then
+              echo "| Web (8082) | 200 | 100,000 | **${H2_STRESS_WEB}** | ✅ |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Web (8082) | 200 | 100,000 | N/A | ⚠️ |" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Resource usage
+            H2_AVG_CPU="${{ steps.run-tests.outputs.h2load_avg_cpu }}"
+            if [ -n "$H2_AVG_CPU" ] && [ "$H2_AVG_CPU" != "N/A" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "> **Resource Usage During Stress Test:** Average CPU: ${H2_AVG_CPU}%" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 📦 Test Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Detailed test results are available in the **Artifacts** section:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Functional Tests" >> $GITHUB_STEP_SUMMARY
           echo "- \`functional-results-default.txt\` - Default frontend functional tests" >> $GITHUB_STEP_SUMMARY
           echo "- \`functional-results-api.txt\` - Frontend-API functional tests" >> $GITHUB_STEP_SUMMARY
           echo "- \`functional-results-web.txt\` - Frontend-Web functional tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### HTTP/2 (H2C) Go Client Tests" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-low-default.txt\` - Low concurrency (default frontend)" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-low-api.txt\` - Low concurrency (frontend-api)" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-low-web.txt\` - Low concurrency (frontend-web)" >> $GITHUB_STEP_SUMMARY
@@ -804,6 +1058,16 @@ jobs:
           echo "- \`perf-high-default.txt\` - High concurrency (default frontend)" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-high-api.txt\` - High concurrency (frontend-api)" >> $GITHUB_STEP_SUMMARY
           echo "- \`perf-high-web.txt\` - High concurrency (frontend-web)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`perf-high-monitor.csv\` - Resource monitoring during high concurrency test (CPU, Memory, Network, I/O)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### h2load Benchmark Tests" >> $GITHUB_STEP_SUMMARY
+          echo "- \`h2load-low-default.txt\` - h2load low load (1K req, 10 clients)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`h2load-medium-default.txt\` - h2load medium load (10K req, 50 clients)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`h2load-high-default.txt\` - h2load high load (50K req, 100 clients)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`h2load-stress-default.txt\` - h2load stress test default frontend (100K req, 200 clients)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`h2load-stress-api.txt\` - h2load stress test API frontend (100K req, 200 clients)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`h2load-stress-web.txt\` - h2load stress test Web frontend (100K req, 200 clients)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`h2load-stress-monitor.csv\` - Resource monitoring during stress test (CPU, Memory, Network, I/O)" >> $GITHUB_STEP_SUMMARY
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## ℹ️ Environment" >> $GITHUB_STEP_SUMMARY
@@ -864,13 +1128,30 @@ jobs:
 
             > **Note:** All performance tests use HTTP/2 over cleartext (H2C) protocol.
 
+            ### ⚡ h2load HTTP/2 Benchmarks
+
+            | Test Level | Clients | Total Requests | Requests/sec |
+            |-----------|:-------:|:--------------:|:------------:|
+            | Low | 10 | 1,000 | ${{ steps.run-tests.outputs.h2load_low_rps }} |
+            | Medium | 50 | 10,000 | ${{ steps.run-tests.outputs.h2load_medium_rps }} |
+            | High | 100 | 50,000 | ${{ steps.run-tests.outputs.h2load_high_rps }} |
+
+            **Stress Test (All Frontends - 200 clients, 100K requests each):**
+            - Default: ${{ steps.run-tests.outputs.h2load_stress_default_rps }} req/s
+            - API: ${{ steps.run-tests.outputs.h2load_stress_api_rps }} req/s
+            - Web: ${{ steps.run-tests.outputs.h2load_stress_web_rps }} req/s
+
             <details>
             <summary>View detailed test results</summary>
 
             Test artifacts are available in the workflow run:
+
+            **Functional Tests:**
             - \`functional-results-default.txt\` - Default frontend tests
             - \`functional-results-api.txt\` - Frontend-API tests
             - \`functional-results-web.txt\` - Frontend-Web tests
+
+            **HTTP/2 (H2C) Go Client Tests:**
             - \`perf-low-default.txt\` - Low concurrency (default)
             - \`perf-low-api.txt\` - Low concurrency (API)
             - \`perf-low-web.txt\` - Low concurrency (Web)
@@ -880,6 +1161,16 @@ jobs:
             - \`perf-high-default.txt\` - High concurrency (default)
             - \`perf-high-api.txt\` - High concurrency (API)
             - \`perf-high-web.txt\` - High concurrency (Web)
+            - \`perf-high-monitor.csv\` - Resource monitoring during high concurrency test
+
+            **h2load Benchmark Tests:**
+            - \`h2load-low-default.txt\` - h2load low load (1K req, 10 clients)
+            - \`h2load-medium-default.txt\` - h2load medium load (10K req, 50 clients)
+            - \`h2load-high-default.txt\` - h2load high load (50K req, 100 clients)
+            - \`h2load-stress-default.txt\` - Stress test default frontend
+            - \`h2load-stress-api.txt\` - Stress test API frontend
+            - \`h2load-stress-web.txt\` - Stress test Web frontend
+            - \`h2load-stress-monitor.csv\` - Resource monitoring (CPU, Memory, Network, I/O)
 
             **Note:** All tests run on 3 frontends (default on port 8080, frontend-api on port 8081, frontend-web on port 8082)
 
