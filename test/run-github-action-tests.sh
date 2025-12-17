@@ -131,6 +131,46 @@ if ! command -v bc &> /dev/null; then
     exit 1
 fi
 
+# Check for h2load (optional but recommended for HTTP/2 benchmarking)
+if ! command -v h2load &> /dev/null; then
+    print_info "h2load not found, attempting to install..."
+
+    # Try brew (macOS), then apt-get (Ubuntu)
+    if command -v brew &> /dev/null; then
+        print_info "Installing nghttp2 (includes h2load) via Homebrew..."
+        brew install nghttp2 || {
+            print_error "Failed to install nghttp2 with brew"
+            echo "Try manually: brew install nghttp2"
+            echo "h2load tests will be skipped"
+            H2LOAD_AVAILABLE=false
+        }
+    elif command -v apt-get &> /dev/null; then
+        print_info "Installing nghttp2-client (includes h2load) via apt-get..."
+        sudo apt-get install -y nghttp2-client || {
+            print_error "Failed to install nghttp2-client with apt-get"
+            echo "Try manually: sudo apt-get install nghttp2-client"
+            echo "h2load tests will be skipped"
+            H2LOAD_AVAILABLE=false
+        }
+    else
+        print_info "h2load not available and no package manager found"
+        echo "Install options:"
+        echo "  - brew install nghttp2 (macOS)"
+        echo "  - apt-get install nghttp2-client (Ubuntu/Debian)"
+        echo "h2load tests will be skipped"
+        H2LOAD_AVAILABLE=false
+    fi
+
+    # Check if installation succeeded
+    if command -v h2load &> /dev/null; then
+        print_success "h2load installed successfully"
+        H2LOAD_AVAILABLE=true
+    fi
+else
+    print_success "h2load is available: $(h2load --version 2>&1 | head -1)"
+    H2LOAD_AVAILABLE=true
+fi
+
 # Check for yamllint (for config validation)
 if ! command -v yamllint &> /dev/null; then
     print_info "yamllint not found, attempting to install..."
@@ -624,6 +664,129 @@ else
     exit 1
 fi
 
+# h2load Performance Tests (if available)
+if [ "$H2LOAD_AVAILABLE" = "true" ]; then
+    echo "=== Running h2load HTTP/2 Performance Tests ==="
+
+    # Function to get container resource usage
+    get_container_stats() {
+        local container_name=$1
+        if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+            podman stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
+        else
+            docker stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
+        fi
+    }
+
+    # Get gateway container name
+    GATEWAY_CONTAINER=$($COMPOSE_CMD ps -q gateway 2>/dev/null | head -1)
+    if [ -z "$GATEWAY_CONTAINER" ]; then
+        print_error "Cannot find gateway container"
+        H2LOAD_PASSED=false
+    else
+        # Test 1: Default frontend - Low load (1000 requests, 10 concurrent clients)
+        print_info "h2load Test 1: Default frontend - Low load (1000 req, 10 clients)"
+        STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+        h2load -n 1000 -c 10 -m 10 http://localhost:8080/ > h2load-low-default.txt 2>&1
+        STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
+
+        cat h2load-low-default.txt
+        echo "Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
+
+        # Test 2: API frontend - Medium load (10000 requests, 50 concurrent clients)
+        print_info "h2load Test 2: API frontend - Medium load (10K req, 50 clients)"
+        STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+        h2load -n 10000 -c 50 -m 10 http://localhost:8081/api > h2load-medium-api.txt 2>&1
+        STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
+
+        cat h2load-medium-api.txt
+        echo "Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
+
+        # Test 3: Web frontend - High load (50000 requests, 100 concurrent clients)
+        print_info "h2load Test 3: Web frontend - High load (50K req, 100 clients)"
+        STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
+        h2load -n 50000 -c 100 -m 10 http://localhost:8082/ > h2load-high-web.txt 2>&1
+        STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
+
+        cat h2load-high-web.txt
+        echo "Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
+
+        # Test 4: Stress test - All frontends simultaneously with resource monitoring
+        print_info "h2load Test 4: Stress test - All frontends (100K req, 200 clients each)"
+
+        # Start resource monitoring in background
+        MONITOR_PID=""
+        if [ "$CONTAINER_RUNTIME" = "podman" ]; then
+            (while true; do
+                podman stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}" "$GATEWAY_CONTAINER" 2>/dev/null
+                sleep 1
+            done) > h2load-stress-monitor.csv 2>&1 &
+            MONITOR_PID=$!
+        else
+            (while true; do
+                docker stats --no-stream --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}},{{.BlockIO}}" "$GATEWAY_CONTAINER" 2>/dev/null
+                sleep 1
+            done) > h2load-stress-monitor.csv 2>&1 &
+            MONITOR_PID=$!
+        fi
+
+        # Run stress test on all frontends simultaneously
+        h2load -n 100000 -c 200 -m 10 http://localhost:8080/ > h2load-stress-default.txt 2>&1 &
+        PID_H2_DEFAULT=$!
+        h2load -n 100000 -c 200 -m 10 http://localhost:8081/api > h2load-stress-api.txt 2>&1 &
+        PID_H2_API=$!
+        h2load -n 100000 -c 200 -m 10 http://localhost:8082/ > h2load-stress-web.txt 2>&1 &
+        PID_H2_WEB=$!
+
+        # Wait for all tests to complete
+        wait $PID_H2_DEFAULT $PID_H2_API $PID_H2_WEB
+
+        # Stop monitoring
+        if [ -n "$MONITOR_PID" ]; then
+            kill $MONITOR_PID 2>/dev/null || true
+            wait $MONITOR_PID 2>/dev/null || true
+        fi
+
+        print_success "h2load stress tests completed"
+
+        # Display stress test results
+        echo "=== Stress Test Results - Default Frontend ==="
+        cat h2load-stress-default.txt
+        echo ""
+        echo "=== Stress Test Results - API Frontend ==="
+        cat h2load-stress-api.txt
+        echo ""
+        echo "=== Stress Test Results - Web Frontend ==="
+        cat h2load-stress-web.txt
+        echo ""
+        echo "=== Resource Monitoring During Stress Test ==="
+        if [ -f h2load-stress-monitor.csv ]; then
+            echo "Name,CPU%,Memory,NetIO,BlockIO"
+            cat h2load-stress-monitor.csv | tail -20
+        fi
+
+        # Validate h2load results
+        H2LOAD_PASSED=true
+        for file in h2load-low-default.txt h2load-medium-api.txt h2load-high-web.txt h2load-stress-default.txt h2load-stress-api.txt h2load-stress-web.txt; do
+            if [ -f "$file" ]; then
+                # Check if completed successfully (look for "finished in" or status distribution)
+                if grep -q "finished in\|requests:" "$file" 2>/dev/null; then
+                    print_success "$file completed successfully"
+                else
+                    print_error "$file did not complete successfully"
+                    H2LOAD_PASSED=false
+                fi
+            else
+                print_error "$file not found"
+                H2LOAD_PASSED=false
+            fi
+        done
+    fi
+else
+    print_info "h2load not available, skipping h2load performance tests"
+    H2LOAD_PASSED="N/A"
+fi
+
 # Dynamic backend test
 echo "=== Testing Dynamic Backend Updates ==="
 RESPONSE=$(curl -sf -X POST http://localhost:9090/api/frontends/default/backends \
@@ -674,7 +837,12 @@ else
 fi
 
 # Calculate overall status
-if [ "$FUNCTIONAL_TESTS_PASSED" = "true" ] && [ "$PERF_LOW_PASSED" = "true" ] && [ "$PERF_MEDIUM_PASSED" = "true" ] && [ "$PERF_HTTP2_PASSED" = "true" ] && [ "$DYNAMIC_BACKEND_PASSED" = "true" ]; then
+H2LOAD_CHECK=true
+if [ "$H2LOAD_PASSED" = "false" ]; then
+    H2LOAD_CHECK=false
+fi
+
+if [ "$FUNCTIONAL_TESTS_PASSED" = "true" ] && [ "$PERF_LOW_PASSED" = "true" ] && [ "$PERF_MEDIUM_PASSED" = "true" ] && [ "$PERF_HTTP2_PASSED" = "true" ] && [ "$DYNAMIC_BACKEND_PASSED" = "true" ] && [ "$H2LOAD_CHECK" = "true" ]; then
     OVERALL_STATUS="✅ ALL TESTS PASSED"
     OVERALL_EMOJI="🎉"
 else
@@ -727,6 +895,15 @@ if [ "$DYNAMIC_BACKEND_PASSED" = "true" ]; then
     echo "| **Dynamic Backend** | ✅ PASS | Registration & unregistration working |"
 else
     echo "| **Dynamic Backend** | ❌ FAIL | Backend updates not working |"
+fi
+
+# h2load tests
+if [ "$H2LOAD_PASSED" = "true" ]; then
+    echo "| **h2load Benchmark** | ✅ PASS | HTTP/2 load testing completed |"
+elif [ "$H2LOAD_PASSED" = "false" ]; then
+    echo "| **h2load Benchmark** | ❌ FAIL | Some h2load tests failed |"
+else
+    echo "| **h2load Benchmark** | ⏭️ SKIP | h2load not available |"
 fi
 
 echo ""
@@ -795,6 +972,23 @@ fi
 echo ""
 echo "> **Note:** All performance tests use HTTP/2 over cleartext (H2C) protocol."
 
+# h2load Performance Metrics
+if [ "$H2LOAD_PASSED" = "true" ]; then
+    echo ""
+    echo "## 🔥 h2load Benchmark Results"
+    echo ""
+    echo "| Test Type | Frontend | Concurrency | Total Requests | Description |"
+    echo "|-----------|:--------:|:-----------:|:--------------:|-------------|"
+    echo "| Low Load | Default | 10 | 1,000 | Baseline performance test |"
+    echo "| Medium Load | API | 50 | 10,000 | Moderate concurrent load |"
+    echo "| High Load | Web | 100 | 50,000 | Heavy concurrent traffic |"
+    echo "| Stress Test | Default | 200 | 100,000 | Maximum capacity test |"
+    echo "| Stress Test | API | 200 | 100,000 | Maximum capacity test |"
+    echo "| Stress Test | Web | 200 | 100,000 | Maximum capacity test |"
+    echo ""
+    echo "> **Resource Monitoring:** CPU and RAM usage tracked during stress tests (see \`h2load-stress-monitor.csv\`)"
+fi
+
 echo ""
 echo "## 📦 Test Artifacts"
 echo ""
@@ -811,6 +1005,18 @@ echo "- \`perf-medium-web.txt\` - Medium concurrency (frontend-web)"
 echo "- \`perf-high-default.txt\` - High concurrency (default frontend)"
 echo "- \`perf-high-api.txt\` - High concurrency (frontend-api)"
 echo "- \`perf-high-web.txt\` - High concurrency (frontend-web)"
+
+if [ "$H2LOAD_PASSED" = "true" ]; then
+    echo ""
+    echo "### h2load Benchmark Results:"
+    echo "- \`h2load-low-default.txt\` - Low load (1K req, 10 clients)"
+    echo "- \`h2load-medium-api.txt\` - Medium load (10K req, 50 clients)"
+    echo "- \`h2load-high-web.txt\` - High load (50K req, 100 clients)"
+    echo "- \`h2load-stress-default.txt\` - Stress test (100K req, 200 clients)"
+    echo "- \`h2load-stress-api.txt\` - Stress test (100K req, 200 clients)"
+    echo "- \`h2load-stress-web.txt\` - Stress test (100K req, 200 clients)"
+    echo "- \`h2load-stress-monitor.csv\` - Resource monitoring during stress test"
+fi
 
 echo ""
 echo "## ℹ️ Environment"
