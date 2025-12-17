@@ -53,7 +53,7 @@ GATEWAY_CONTAINER="http-gateway"
 # Performance tests - Low concurrency (8 workers, 2,000 requests - all frontends in parallel)
 echo "=== Running Performance Tests - Low (All Frontends in Parallel) ==="
 STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
-echo "Resource usage before test - $STATS_BEFORE"
+echo "Resource usage before test - Memory: $(echo $STATS_BEFORE | awk '{print $1}'), CPU: $(echo $STATS_BEFORE | awk '{print $2}')"
 
 # Run all 3 frontends simultaneously in background
 go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=8 -n=2000 > perf-low-default.txt 2>&1 &
@@ -67,7 +67,7 @@ PID_WEB=$!
 wait $PID_DEFAULT $PID_API $PID_WEB
 STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
 echo "✓ All low concurrency tests completed"
-echo "Resource usage after test - $STATS_AFTER"
+echo "Resource usage after test - Memory: $(echo $STATS_AFTER | awk '{print $1}'), CPU: $(echo $STATS_AFTER | awk '{print $2}')"
 
 # Display results
 echo "=== Default Frontend Results ==="
@@ -124,7 +124,7 @@ fi
 # Performance tests - Medium concurrency (16 workers, 20,000 requests - all frontends in parallel)
 echo "=== Running Performance Tests - Medium (All Frontends in Parallel) ==="
 STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
-echo "Resource usage before test - $STATS_BEFORE"
+echo "Resource usage before test - Memory: $(echo $STATS_BEFORE | awk '{print $1}'), CPU: $(echo $STATS_BEFORE | awk '{print $2}')"
 
 # Run all 3 frontends simultaneously in background
 go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=16 -n=20000 > perf-medium-default.txt 2>&1 &
@@ -138,7 +138,7 @@ PID_WEB=$!
 wait $PID_DEFAULT $PID_API $PID_WEB
 STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
 echo "✓ All medium concurrency tests completed"
-echo "Resource usage after test - $STATS_AFTER"
+echo "Resource usage after test - Memory: $(echo $STATS_AFTER | awk '{print $1}'), CPU: $(echo $STATS_AFTER | awk '{print $2}')"
 
 # Display results
 echo "=== Default Frontend Results ==="
@@ -212,7 +212,7 @@ elif command -v docker &> /dev/null; then
 fi
 
 STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
-echo "Resource usage before test - $STATS_BEFORE"
+echo "Resource usage before test - Memory: $(echo $STATS_BEFORE | awk '{print $1}'), CPU: $(echo $STATS_BEFORE | awk '{print $2}')"
 
 # Run all 3 frontends simultaneously in background
 go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=32 -n=100000 > perf-high-default.txt 2>&1 &
@@ -233,7 +233,7 @@ fi
 
 STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
 echo "✓ All high concurrency tests completed"
-echo "Resource usage after test - $STATS_AFTER"
+echo "Resource usage after test - Memory: $(echo $STATS_AFTER | awk '{print $1}'), CPU: $(echo $STATS_AFTER | awk '{print $2}')"
 
 # Display resource monitoring summary
 if [ -f perf-high-monitor.csv ]; then

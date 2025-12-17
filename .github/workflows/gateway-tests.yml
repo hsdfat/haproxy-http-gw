@@ -392,7 +392,12 @@ jobs:
             podman stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
           }
 
-          GATEWAY_CONTAINER="gateway"
+          # Get the actual gateway container name (handle both http-gateway and test_gateway_1 formats)
+          GATEWAY_CONTAINER=$(podman ps --format "{{.Names}}" | grep -E "gateway|http-gateway" | head -1)
+          if [ -z "$GATEWAY_CONTAINER" ]; then
+            GATEWAY_CONTAINER="http-gateway"
+          fi
+          echo "Using gateway container: $GATEWAY_CONTAINER"
 
           # Performance tests - Low concurrency (8 workers, 2,000 requests - all frontends in parallel)
           echo "=== Running Performance Tests - Low (All Frontends in Parallel) ==="
@@ -547,7 +552,7 @@ jobs:
           MONITOR_PID=$!
 
           STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
-          echo "Resource usage before test - $STATS_BEFORE"
+          echo "Resource usage before test - Memory: $(echo $STATS_BEFORE | awk '{print $1}'), CPU: $(echo $STATS_BEFORE | awk '{print $2}')"
 
           # Run all 3 frontends simultaneously in background
           go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=32 -n=100000 > perf-high-default.txt 2>&1 &
@@ -566,7 +571,7 @@ jobs:
 
           STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
           echo "✓ All high concurrency tests completed"
-          echo "Resource usage after test - $STATS_AFTER"
+          echo "Resource usage after test - Memory: $(echo $STATS_AFTER | awk '{print $1}'), CPU: $(echo $STATS_AFTER | awk '{print $2}')"
 
           # Display resource monitoring summary
           if [ -f perf-high-monitor.csv ]; then
@@ -643,7 +648,12 @@ jobs:
               podman stats --no-stream --format "{{.MemUsage}} {{.CPUPerc}}" "$container_name" 2>/dev/null || echo "N/A N/A"
             }
 
-            GATEWAY_CONTAINER="gateway"
+            # Get the actual gateway container name (handle both http-gateway and test_gateway_1 formats)
+            GATEWAY_CONTAINER=$(podman ps --format "{{.Names}}" | grep -E "gateway|http-gateway" | head -1)
+            if [ -z "$GATEWAY_CONTAINER" ]; then
+              GATEWAY_CONTAINER="http-gateway"
+            fi
+            echo "Using gateway container: $GATEWAY_CONTAINER"
 
             # Test 1: Low load baseline (1000 requests, 10 concurrent clients)
             echo "→ h2load Test 1: Low load baseline (1K req, 10 clients)"
