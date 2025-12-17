@@ -15,7 +15,7 @@
 package client_test
 
 import (
-	"context"
+	"fmt"
 	"testing"
 	"time"
 
