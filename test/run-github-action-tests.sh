@@ -132,33 +132,35 @@ if ! command -v bc &> /dev/null; then
 fi
 
 # Check for h2load (optional but recommended for HTTP/2 benchmarking)
+H2LOAD_AVAILABLE=false
 if ! command -v h2load &> /dev/null; then
     print_info "h2load not found, attempting to install..."
 
     # Try brew (macOS), then apt-get (Ubuntu)
     if command -v brew &> /dev/null; then
         print_info "Installing nghttp2 (includes h2load) via Homebrew..."
-        brew install nghttp2 || {
+        if brew install nghttp2 2>/dev/null; then
+            H2LOAD_AVAILABLE=true
+        else
             print_error "Failed to install nghttp2 with brew"
             echo "Try manually: brew install nghttp2"
             echo "h2load tests will be skipped"
-            H2LOAD_AVAILABLE=false
-        }
+        fi
     elif command -v apt-get &> /dev/null; then
         print_info "Installing nghttp2-client (includes h2load) via apt-get..."
-        sudo apt-get install -y nghttp2-client || {
+        if sudo apt-get install -y nghttp2-client 2>/dev/null; then
+            H2LOAD_AVAILABLE=true
+        else
             print_error "Failed to install nghttp2-client with apt-get"
             echo "Try manually: sudo apt-get install nghttp2-client"
             echo "h2load tests will be skipped"
-            H2LOAD_AVAILABLE=false
-        }
+        fi
     else
         print_info "h2load not available and no package manager found"
         echo "Install options:"
         echo "  - brew install nghttp2 (macOS)"
         echo "  - apt-get install nghttp2-client (Ubuntu/Debian)"
         echo "h2load tests will be skipped"
-        H2LOAD_AVAILABLE=false
     fi
 
     # Check if installation succeeded
@@ -679,7 +681,7 @@ if [ "$H2LOAD_AVAILABLE" = "true" ]; then
     }
 
     # Get gateway container name
-    GATEWAY_CONTAINER=$($COMPOSE_CMD ps -q gateway 2>/dev/null | head -1)
+    GATEWAY_CONTAINER=$($COMPOSE_CMD ps -q gateway 2>/dev/null | head -1) || true
     if [ -z "$GATEWAY_CONTAINER" ]; then
         print_error "Cannot find gateway container"
         H2LOAD_PASSED=false
@@ -687,7 +689,7 @@ if [ "$H2LOAD_AVAILABLE" = "true" ]; then
         # Test 1: Default frontend - Low load (1000 requests, 10 concurrent clients)
         print_info "h2load Test 1: Default frontend - Low load (1000 req, 10 clients)"
         STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
-        h2load -n 1000 -c 10 -m 10 http://localhost:8080/ > h2load-low-default.txt 2>&1
+        h2load -n 1000 -c 10 -m 10 http://localhost:8080/ > h2load-low-default.txt 2>&1 || true
         STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
 
         cat h2load-low-default.txt
@@ -696,7 +698,7 @@ if [ "$H2LOAD_AVAILABLE" = "true" ]; then
         # Test 2: API frontend - Medium load (10000 requests, 50 concurrent clients)
         print_info "h2load Test 2: API frontend - Medium load (10K req, 50 clients)"
         STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
-        h2load -n 10000 -c 50 -m 10 http://localhost:8081/api > h2load-medium-api.txt 2>&1
+        h2load -n 10000 -c 50 -m 10 http://localhost:8081/api > h2load-medium-api.txt 2>&1 || true
         STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
 
         cat h2load-medium-api.txt
@@ -705,7 +707,7 @@ if [ "$H2LOAD_AVAILABLE" = "true" ]; then
         # Test 3: Web frontend - High load (50000 requests, 100 concurrent clients)
         print_info "h2load Test 3: Web frontend - High load (50K req, 100 clients)"
         STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
-        h2load -n 50000 -c 100 -m 10 http://localhost:8082/ > h2load-high-web.txt 2>&1
+        h2load -n 50000 -c 100 -m 10 http://localhost:8082/ > h2load-high-web.txt 2>&1 || true
         STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
 
         cat h2load-high-web.txt
@@ -731,15 +733,15 @@ if [ "$H2LOAD_AVAILABLE" = "true" ]; then
         fi
 
         # Run stress test on all frontends simultaneously
-        h2load -n 100000 -c 200 -m 10 http://localhost:8080/ > h2load-stress-default.txt 2>&1 &
+        (h2load -n 100000 -c 200 -m 10 http://localhost:8080/ > h2load-stress-default.txt 2>&1 || true) &
         PID_H2_DEFAULT=$!
-        h2load -n 100000 -c 200 -m 10 http://localhost:8081/api > h2load-stress-api.txt 2>&1 &
+        (h2load -n 100000 -c 200 -m 10 http://localhost:8081/api > h2load-stress-api.txt 2>&1 || true) &
         PID_H2_API=$!
-        h2load -n 100000 -c 200 -m 10 http://localhost:8082/ > h2load-stress-web.txt 2>&1 &
+        (h2load -n 100000 -c 200 -m 10 http://localhost:8082/ > h2load-stress-web.txt 2>&1 || true) &
         PID_H2_WEB=$!
 
         # Wait for all tests to complete
-        wait $PID_H2_DEFAULT $PID_H2_API $PID_H2_WEB
+        wait $PID_H2_DEFAULT $PID_H2_API $PID_H2_WEB || true
 
         # Stop monitoring
         if [ -n "$MONITOR_PID" ]; then
