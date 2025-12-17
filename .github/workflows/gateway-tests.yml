@@ -397,7 +397,7 @@ jobs:
           # Performance tests - Low concurrency (8 workers, 2,000 requests - all frontends in parallel)
           echo "=== Running Performance Tests - Low (All Frontends in Parallel) ==="
           STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
-          echo "Resource usage before test - $STATS_BEFORE"
+          echo "Resource usage before test - Memory: $(echo $STATS_BEFORE | awk '{print $1}'), CPU: $(echo $STATS_BEFORE | awk '{print $2}')"
 
           # Run all 3 frontends simultaneously in background
           go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=8 -n=2000 > perf-low-default.txt 2>&1 &
@@ -411,7 +411,7 @@ jobs:
           wait $PID_DEFAULT $PID_API $PID_WEB
           STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
           echo "✓ All low concurrency tests completed"
-          echo "Resource usage after test - $STATS_AFTER"
+          echo "Resource usage after test - Memory: $(echo $STATS_AFTER | awk '{print $1}'), CPU: $(echo $STATS_AFTER | awk '{print $2}')"
 
           # Display results
           echo "=== Default Frontend Results ==="
@@ -468,7 +468,7 @@ jobs:
           # Performance tests - Medium concurrency (16 workers, 20,000 requests - all frontends in parallel)
           echo "=== Running Performance Tests - Medium (All Frontends in Parallel) ==="
           STATS_BEFORE=$(get_container_stats "$GATEWAY_CONTAINER")
-          echo "Resource usage before test - $STATS_BEFORE"
+          echo "Resource usage before test - Memory: $(echo $STATS_BEFORE | awk '{print $1}'), CPU: $(echo $STATS_BEFORE | awk '{print $2}')"
 
           # Run all 3 frontends simultaneously in background
           go run ./client/cmd/perf-client/main.go -url=http://localhost:8080 -http2 -c=16 -n=20000 > perf-medium-default.txt 2>&1 &
@@ -482,7 +482,7 @@ jobs:
           wait $PID_DEFAULT $PID_API $PID_WEB
           STATS_AFTER=$(get_container_stats "$GATEWAY_CONTAINER")
           echo "✓ All medium concurrency tests completed"
-          echo "Resource usage after test - $STATS_AFTER"
+          echo "Resource usage after test - Memory: $(echo $STATS_AFTER | awk '{print $1}'), CPU: $(echo $STATS_AFTER | awk '{print $2}')"
 
           # Display results
           echo "=== Default Frontend Results ==="
@@ -653,8 +653,8 @@ jobs:
             echo "  Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
 
             # Extract h2load low results
-            H2LOAD_LOW_RPS=$(grep "requests/s" h2load-low-default.txt | awk '{print $2}' || echo "N/A")
-            H2LOAD_LOW_SUCCESS=$(grep "succeeded" h2load-low-default.txt | awk '{print $1}' || echo "0")
+            H2LOAD_LOW_RPS=$(grep -E "req/s" h2load-low-default.txt | head -1 | awk '{print $NF}' || echo "N/A")
+            H2LOAD_LOW_SUCCESS=$(grep -E "requests:" h2load-low-default.txt | awk '{print $2}' | head -1 || echo "0")
             echo "h2load_low_rps=${H2LOAD_LOW_RPS}" >> $GITHUB_OUTPUT
             echo "h2load_low_success=${H2LOAD_LOW_SUCCESS}" >> $GITHUB_OUTPUT
             cat h2load-low-default.txt
@@ -667,8 +667,8 @@ jobs:
             echo "  Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
 
             # Extract h2load medium results
-            H2LOAD_MEDIUM_RPS=$(grep "requests/s" h2load-medium-default.txt | awk '{print $2}' || echo "N/A")
-            H2LOAD_MEDIUM_SUCCESS=$(grep "succeeded" h2load-medium-default.txt | awk '{print $1}' || echo "0")
+            H2LOAD_MEDIUM_RPS=$(grep -E "req/s" h2load-medium-default.txt | head -1 | awk '{print $NF}' || echo "N/A")
+            H2LOAD_MEDIUM_SUCCESS=$(grep -E "requests:" h2load-medium-default.txt | awk '{print $2}' | head -1 || echo "0")
             echo "h2load_medium_rps=${H2LOAD_MEDIUM_RPS}" >> $GITHUB_OUTPUT
             echo "h2load_medium_success=${H2LOAD_MEDIUM_SUCCESS}" >> $GITHUB_OUTPUT
             cat h2load-medium-default.txt
@@ -681,8 +681,8 @@ jobs:
             echo "  Resource usage - Before: $STATS_BEFORE | After: $STATS_AFTER"
 
             # Extract h2load high results
-            H2LOAD_HIGH_RPS=$(grep "requests/s" h2load-high-default.txt | awk '{print $2}' || echo "N/A")
-            H2LOAD_HIGH_SUCCESS=$(grep "succeeded" h2load-high-default.txt | awk '{print $1}' || echo "0")
+            H2LOAD_HIGH_RPS=$(grep -E "req/s" h2load-high-default.txt | head -1 | awk '{print $NF}' || echo "N/A")
+            H2LOAD_HIGH_SUCCESS=$(grep -E "requests:" h2load-high-default.txt | awk '{print $2}' | head -1 || echo "0")
             echo "h2load_high_rps=${H2LOAD_HIGH_RPS}" >> $GITHUB_OUTPUT
             echo "h2load_high_success=${H2LOAD_HIGH_SUCCESS}" >> $GITHUB_OUTPUT
             cat h2load-high-default.txt
@@ -716,9 +716,9 @@ jobs:
             echo "  Stress tests completed"
 
             # Extract stress test results
-            H2LOAD_STRESS_DEFAULT_RPS=$(grep "requests/s" h2load-stress-default.txt | awk '{print $2}' || echo "N/A")
-            H2LOAD_STRESS_API_RPS=$(grep "requests/s" h2load-stress-api.txt | awk '{print $2}' || echo "N/A")
-            H2LOAD_STRESS_WEB_RPS=$(grep "requests/s" h2load-stress-web.txt | awk '{print $2}' || echo "N/A")
+            H2LOAD_STRESS_DEFAULT_RPS=$(grep -E "req/s" h2load-stress-default.txt | head -1 | awk '{print $NF}' || echo "N/A")
+            H2LOAD_STRESS_API_RPS=$(grep -E "req/s" h2load-stress-api.txt | head -1 | awk '{print $NF}' || echo "N/A")
+            H2LOAD_STRESS_WEB_RPS=$(grep -E "req/s" h2load-stress-web.txt | head -1 | awk '{print $NF}' || echo "N/A")
 
             echo "h2load_stress_default_rps=${H2LOAD_STRESS_DEFAULT_RPS}" >> $GITHUB_OUTPUT
             echo "h2load_stress_api_rps=${H2LOAD_STRESS_API_RPS}" >> $GITHUB_OUTPUT
