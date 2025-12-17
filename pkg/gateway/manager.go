@@ -29,23 +29,26 @@ var logger = utils.GetLogger()
 
 // Manager handles backend events and updates HAProxy configuration
 type Manager struct {
-	haproxyClient api.HAProxyClient
-	provider      BackendProvider
-	eventChan     chan BackendEvent
-	stopChan      chan struct{}
-	wg            sync.WaitGroup
-	mu            sync.RWMutex
-	txMu          sync.Mutex // Mutex to serialize HAProxy transactions
-	backends      map[string]*Backend
-	syncPeriod    time.Duration
+	haproxyClient   api.HAProxyClient
+	provider        BackendProvider
+	eventChan       chan BackendEvent
+	stopChan        chan struct{}
+	wg              sync.WaitGroup
+	mu              sync.RWMutex
+	txMu            sync.Mutex // Mutex to serialize HAProxy transactions
+	backends        map[string]*Backend
+	runtimeBackends map[string]*RuntimeBackend // Track runtime state for dynamic updates
+	syncPeriod      time.Duration
+	serverSlotSize  int // Number of pre-allocated server slots (default: 42)
 }
 
 // ManagerConfig holds configuration for the Manager
 type ManagerConfig struct {
-	HAProxyClient api.HAProxyClient
-	Provider      BackendProvider
-	SyncPeriod    time.Duration // How often to reconcile HAProxy config
-	EventChanSize int           // Size of event channel buffer
+	HAProxyClient  api.HAProxyClient
+	Provider       BackendProvider
+	SyncPeriod     time.Duration // How often to reconcile HAProxy config
+	EventChanSize  int           // Size of event channel buffer
+	ServerSlotSize int           // Number of pre-allocated server slots per backend (default: 42)
 }
 
 // NewManager creates a new gateway manager
@@ -56,14 +59,19 @@ func NewManager(config ManagerConfig) *Manager {
 	if config.EventChanSize == 0 {
 		config.EventChanSize = 100
 	}
+	if config.ServerSlotSize == 0 {
+		config.ServerSlotSize = 42
+	}
 
 	return &Manager{
-		haproxyClient: config.HAProxyClient,
-		provider:      config.Provider,
-		eventChan:     make(chan BackendEvent, config.EventChanSize),
-		stopChan:      make(chan struct{}),
-		backends:      make(map[string]*Backend),
-		syncPeriod:    config.SyncPeriod,
+		haproxyClient:   config.HAProxyClient,
+		provider:        config.Provider,
+		eventChan:       make(chan BackendEvent, config.EventChanSize),
+		stopChan:        make(chan struct{}),
+		backends:        make(map[string]*Backend),
+		runtimeBackends: make(map[string]*RuntimeBackend),
+		syncPeriod:      config.SyncPeriod,
+		serverSlotSize:  config.ServerSlotSize,
 	}
 }
 
@@ -154,8 +162,111 @@ func (m *Manager) handleBackendEvent(event BackendEvent) {
 }
 
 // syncBackendToHAProxy updates HAProxy configuration for a backend
+// It tries runtime socket update first, falling back to config reload if necessary
 func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 	logger.Debugf("Syncing backend %s to HAProxy", backend.Name)
+
+	m.mu.RLock()
+	existing, exists := m.runtimeBackends[backend.Name]
+	m.mu.RUnlock()
+
+	if exists {
+		// Try runtime update first (no reload)
+		logger.Tracef("[RUNTIME] Attempting runtime update for backend %s", backend.Name)
+		if err := m.tryRuntimeUpdate(existing, backend); err == nil {
+			logger.Infof("[RUNTIME] Successfully updated backend %s via runtime socket (no reload)", backend.Name)
+
+			// Update in-memory state
+			m.mu.Lock()
+			existing.Servers = backend.Servers
+			m.mu.Unlock()
+			return nil
+		} else {
+			// Runtime failed, fall through to config update
+			logger.Warningf("[RUNTIME] Runtime update failed for %s, falling back to config reload: %v", backend.Name, err)
+		}
+	}
+
+	// Config-based update (with reload)
+	return m.configUpdate(backend)
+}
+
+// tryRuntimeUpdate attempts to update backend servers via HAProxy runtime socket
+func (m *Manager) tryRuntimeUpdate(existing *RuntimeBackend, newBackend *Backend) error {
+	logger.Tracef("[RUNTIME] [BACKEND] [SERVER] updating backend %s for haproxy servers update (address and state) through socket", newBackend.Name)
+
+	// Check if we have enough server slots
+	if len(newBackend.Servers) > len(existing.HAProxySrvs) {
+		return fmt.Errorf("not enough server slots (%d needed, %d available)", len(newBackend.Servers), len(existing.HAProxySrvs))
+	}
+
+	// Build runtime server data
+	runtimeData := []api.RuntimeServerData{}
+
+	// Update active servers
+	for i, newSrv := range newBackend.Servers {
+		slot := existing.HAProxySrvs[i]
+
+		// Check if server changed
+		if slot.Address != newSrv.IP || slot.Port != newSrv.Port {
+			logger.Tracef("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s': addr '%s:%d' changed status to ready",
+				newBackend.Name, slot.Name, newSrv.IP, newSrv.Port)
+			runtimeData = append(runtimeData, api.RuntimeServerData{
+				BackendName: newBackend.Name,
+				ServerName:  slot.Name,
+				IP:          newSrv.IP,
+				Port:        newSrv.Port,
+				State:       "ready",
+			})
+
+			// Update in-memory state
+			slot.Address = newSrv.IP
+			slot.Port = newSrv.Port
+			slot.Modified = true
+		}
+	}
+
+	// Disable unused slots
+	for i := len(newBackend.Servers); i < len(existing.HAProxySrvs); i++ {
+		slot := existing.HAProxySrvs[i]
+		if slot.Address != "" {
+			logger.Tracef("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s' changed status to maint",
+				newBackend.Name, slot.Name)
+			runtimeData = append(runtimeData, api.RuntimeServerData{
+				BackendName: newBackend.Name,
+				ServerName:  slot.Name,
+				IP:          "127.0.0.1",
+				Port:        1,
+				State:       "maint",
+			})
+
+			// Update in-memory state
+			slot.Address = ""
+			slot.Port = 0
+			slot.Modified = true
+		}
+	}
+
+	// Execute runtime update
+	if len(runtimeData) > 0 {
+		err := m.haproxyClient.SetServerAddrAndState(runtimeData)
+		if err != nil {
+			existing.DynUpdateFailed = true
+			return fmt.Errorf("runtime socket update failed: %w", err)
+		}
+
+		// Reset modified flags
+		for _, slot := range existing.HAProxySrvs {
+			slot.Modified = false
+		}
+	}
+
+	return nil
+}
+
+// configUpdate performs a full config-based backend update with server slot pre-allocation
+func (m *Manager) configUpdate(backend *Backend) error {
+	logger.Debugf("[CONFIG] Updating backend %s via configuration (reload required)", backend.Name)
 
 	// Serialize transactions to avoid race conditions
 	m.txMu.Lock()
@@ -180,35 +291,95 @@ func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 
 	// Use BackendCreatePermanently to ensure backends are not deleted by other transactions
 	m.haproxyClient.BackendCreatePermanently(haproxyBackend)
-	logger.Infof("Created/updated backend: %s", backend.Name)
+	logger.Infof("[CONFIG] Created/updated backend: %s", backend.Name)
 
 	// Delete all existing servers first (for clean state)
 	if err := m.haproxyClient.BackendServerDeleteAll(backend.Name); err != nil {
-		logger.Debugf("No servers to delete in backend %s", backend.Name)
+		logger.Debugf("[CONFIG] No servers to delete in backend %s", backend.Name)
 	}
 
-	// Add servers
-	for _, srv := range backend.Servers {
+	// Calculate total slots needed (round up to nearest multiple of serverSlotSize)
+	totalSlots := len(backend.Servers)
+	if totalSlots%m.serverSlotSize != 0 || totalSlots == 0 {
+		totalSlots = ((totalSlots / m.serverSlotSize) + 1) * m.serverSlotSize
+	}
+
+	logger.Debugf("[CONFIG] [BACKEND] [SERVER] Pre-allocating %d server slots for backend %s (%d active, %d disabled)",
+		totalSlots, backend.Name, len(backend.Servers), totalSlots-len(backend.Servers))
+
+	// Track runtime backend state
+	haproxySrvs := make([]*HAProxySrv, totalSlots)
+
+	// Add active servers
+	for i, srv := range backend.Servers {
 		server := models.Server{
-			Name:    srv.Name,
+			Name:    fmt.Sprintf("SRV_%d", i+1),
 			Address: srv.IP,
 			Port:    utils.PtrInt64(int64(srv.Port)),
+			ServerParams: models.ServerParams{
+				Maintenance: "disabled",
+			},
 		}
 
 		if err := m.haproxyClient.BackendServerCreate(backend.Name, server); err != nil {
-			logger.Errorf("Failed to create server %s in backend %s: %v", srv.Name, backend.Name, err)
+			logger.Errorf("[CONFIG] Failed to create server %s in backend %s: %v", server.Name, backend.Name, err)
 		} else {
-			logger.Debugf("Added server %s (%s:%d) to backend %s", srv.Name, srv.IP, srv.Port, backend.Name)
+			logger.Tracef("[CONFIG] [BACKEND] [SERVER] Added server %s (%s:%d) to backend %s",
+				server.Name, srv.IP, srv.Port, backend.Name)
+		}
+
+		haproxySrvs[i] = &HAProxySrv{
+			Name:     server.Name,
+			Address:  srv.IP,
+			Port:     srv.Port,
+			Modified: false,
+		}
+	}
+
+	// Add disabled (pre-allocated) slots
+	for i := len(backend.Servers); i < totalSlots; i++ {
+		server := models.Server{
+			Name:    fmt.Sprintf("SRV_%d", i+1),
+			Address: "127.0.0.1",
+			Port:    utils.PtrInt64(1),
+			ServerParams: models.ServerParams{
+				Maintenance: "enabled",
+			},
+		}
+
+		if err := m.haproxyClient.BackendServerCreate(backend.Name, server); err != nil {
+			logger.Errorf("[CONFIG] Failed to create disabled server slot %s in backend %s: %v",
+				server.Name, backend.Name, err)
+		} else {
+			logger.Tracef("[CONFIG] [BACKEND] [SERVER] Added disabled server slot %s to backend %s",
+				server.Name, backend.Name)
+		}
+
+		haproxySrvs[i] = &HAProxySrv{
+			Name:     server.Name,
+			Address:  "",
+			Port:     0,
+			Modified: false,
 		}
 	}
 
 	// Final commit (processes backends and commits the transaction)
-	// Note: APIFinalCommitTransaction handles both backend processing and transaction commit
 	if err := m.haproxyClient.APIFinalCommitTransaction(); err != nil {
 		return fmt.Errorf("failed to final commit transaction: %w", err)
 	}
 
-	logger.Infof("Successfully synced backend %s with %d servers", backend.Name, len(backend.Servers))
+	// Store runtime backend state
+	m.mu.Lock()
+	m.runtimeBackends[backend.Name] = &RuntimeBackend{
+		Name:            backend.Name,
+		Servers:         backend.Servers,
+		HAProxySrvs:     haproxySrvs,
+		DynUpdateFailed: false,
+	}
+	m.mu.Unlock()
+
+	logger.Infof("[CONFIG] Successfully synced backend %s with %d servers (%d total slots)",
+		backend.Name, len(backend.Servers), totalSlots)
 	return nil
 }
 

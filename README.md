@@ -6,10 +6,12 @@ A dynamic HTTP gateway built on HAProxy with support for multiple frontends, dyn
 
 - **Multi-Frontend Support** - Run multiple independent HTTP frontends on different ports
 - **Dynamic Backend Registration** - Backends self-register via API on startup
+- **Runtime-First Updates** - Socket-based updates for instant changes without HAProxy reloads
 - **HTTP/2 (H2C)** - HTTP/2 over cleartext support on all frontends
 - **Round-Robin Load Balancing** - Automatic traffic distribution across backend servers
-- **Zero-Downtime Reloads** - Graceful HAProxy configuration updates
+- **Zero-Downtime Reloads** - Graceful HAProxy configuration updates when necessary
 - **RESTful API** - Manage frontends and backends via HTTP API
+- **Runtime Socket API** - Direct access to HAProxy runtime socket information
 
 ## Quick Start
 
@@ -67,6 +69,43 @@ See [docs/](docs/) directory for comprehensive documentation:
 - **Docker Compose:** [test/docker-compose.yml](test/docker-compose.yml)
 - **GitHub Actions:** [.github/workflows/gateway-tests.yml](.github/workflows/gateway-tests.yml)
 
+## Performance: Runtime-First Updates
+
+The gateway uses a **runtime-first strategy** for backend updates to minimize HAProxy reloads:
+
+### How It Works
+
+1. **Server Slot Pre-allocation**: Each backend gets 42 pre-allocated server slots by default
+2. **Runtime Socket Updates**: Changes within available slots use HAProxy socket commands (instant, no reload)
+3. **Automatic Fallback**: Config reload only when slots exhausted or runtime update fails
+
+### Performance Benefits
+
+```bash
+# Example: 5 frontends with dynamic backends
+# Initial registration:  5 reloads (one per new backend)
+# Subsequent updates:    0 reloads (all via runtime socket)
+
+# Single backend update pattern:
+# Initial: 1 reload (creates 42 slots)
+# Add servers (within 42): 0 reloads
+# Update IPs: 0 reloads
+# Remove servers: 0 reloads
+```
+
+### Verification
+
+Updates via runtime socket do NOT modify the config file - they only change HAProxy's in-memory state:
+
+```bash
+# Check runtime state via API
+curl http://localhost:9090/api/runtime/backends/api-backend/servers
+
+# Config file shows original values
+# Runtime socket shows updated values
+# Traffic uses runtime state (not config file)
+```
+
 ## API Endpoints
 
 ### Frontend Management
@@ -98,6 +137,28 @@ curl -X POST http://localhost:9090/api/frontends/default/backends \
 # Unregister a backend
 curl -X DELETE http://localhost:9090/api/frontends/default/backends/new-backend
 ```
+
+### Runtime Socket API
+
+Query HAProxy runtime socket information directly:
+
+```bash
+# List all backends with runtime state
+curl http://localhost:9090/api/runtime/backends
+
+# Show server connections and stats for a backend
+curl http://localhost:9090/api/runtime/backends/api-backend/servers
+
+# Show detailed backend stats
+curl http://localhost:9090/api/runtime/backends/api-backend/stats
+
+# Execute custom socket commands (read-only: show/get commands)
+curl -X POST http://localhost:9090/api/runtime/command \
+  -H "Content-Type: application/json" \
+  -d '{"command": "show servers state api-backend"}'
+```
+
+**Security Note**: Only read-only socket commands (`show`, `get`) are allowed via the API.
 
 ## Building
 

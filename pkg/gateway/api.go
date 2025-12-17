@@ -83,6 +83,12 @@ func NewAPIServer(gateway *HTTPGateway, port int) *APIServer {
 	mux.HandleFunc("GET /api/backends", api.listBackends)
 	mux.HandleFunc("DELETE /api/backends/{name}", api.unregisterBackend)
 
+	// Runtime socket info endpoints
+	mux.HandleFunc("GET /api/runtime/backends", api.getRuntimeBackends)
+	mux.HandleFunc("GET /api/runtime/backends/{name}/servers", api.getRuntimeServers)
+	mux.HandleFunc("GET /api/runtime/backends/{name}/stats", api.getRuntimeStats)
+	mux.HandleFunc("POST /api/runtime/command", api.executeRuntimeCommand)
+
 	// Health endpoint
 	mux.HandleFunc("GET /health", api.health)
 
@@ -317,6 +323,129 @@ func (a *APIServer) sendBackendError(w http.ResponseWriter, status int, message 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(BackendRegistrationResponse{
+		Success: false,
+		Message: message,
+	})
+}
+
+// RuntimeResponse represents a generic runtime API response
+type RuntimeResponse struct {
+	Success bool        `json:"success"`
+	Message string      `json:"message,omitempty"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// RuntimeCommandRequest represents a request to execute a runtime command
+type RuntimeCommandRequest struct {
+	Command string `json:"command"`
+}
+
+// getRuntimeBackends handles GET /api/runtime/backends
+func (a *APIServer) getRuntimeBackends(w http.ResponseWriter, r *http.Request) {
+	result, err := a.gateway.haproxyClient.ExecuteRaw("show backend")
+	if err != nil {
+		a.sendRuntimeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to query backends: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(RuntimeResponse{
+		Success: true,
+		Data:    result,
+	})
+}
+
+// getRuntimeServers handles GET /api/runtime/backends/{name}/servers
+func (a *APIServer) getRuntimeServers(w http.ResponseWriter, r *http.Request) {
+	backendName := r.PathValue("name")
+	if backendName == "" {
+		a.sendRuntimeError(w, http.StatusBadRequest, "Backend name is required")
+		return
+	}
+
+	// Get server connection info (cleaner output)
+	result, err := a.gateway.haproxyClient.ExecuteRaw(fmt.Sprintf("show servers conn %s", backendName))
+	if err != nil {
+		a.sendRuntimeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to query servers: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(RuntimeResponse{
+		Success: true,
+		Data:    result,
+	})
+}
+
+// getRuntimeStats handles GET /api/runtime/backends/{name}/stats
+func (a *APIServer) getRuntimeStats(w http.ResponseWriter, r *http.Request) {
+	backendName := r.PathValue("name")
+	if backendName == "" {
+		a.sendRuntimeError(w, http.StatusBadRequest, "Backend name is required")
+		return
+	}
+
+	// Get detailed server state
+	result, err := a.gateway.haproxyClient.ExecuteRaw(fmt.Sprintf("show servers state %s", backendName))
+	if err != nil {
+		a.sendRuntimeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to query stats: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(RuntimeResponse{
+		Success: true,
+		Data:    result,
+	})
+}
+
+// executeRuntimeCommand handles POST /api/runtime/command
+func (a *APIServer) executeRuntimeCommand(w http.ResponseWriter, r *http.Request) {
+	var req RuntimeCommandRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.sendRuntimeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request body: %v", err))
+		return
+	}
+
+	if req.Command == "" {
+		a.sendRuntimeError(w, http.StatusBadRequest, "Command is required")
+		return
+	}
+
+	// Security: Only allow read-only commands
+	readOnlyCommands := []string{"show", "get"}
+	isReadOnly := false
+	for _, prefix := range readOnlyCommands {
+		if len(req.Command) >= len(prefix) && req.Command[:len(prefix)] == prefix {
+			isReadOnly = true
+			break
+		}
+	}
+
+	if !isReadOnly {
+		a.sendRuntimeError(w, http.StatusForbidden, "Only read-only commands (show/get) are allowed")
+		return
+	}
+
+	result, err := a.gateway.haproxyClient.ExecuteRaw(req.Command)
+	if err != nil {
+		a.sendRuntimeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to execute command: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(RuntimeResponse{
+		Success: true,
+		Message: "Command executed successfully",
+		Data:    result,
+	})
+}
+
+// sendRuntimeError sends an error response for runtime operations
+func (a *APIServer) sendRuntimeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(RuntimeResponse{
 		Success: false,
 		Message: message,
 	})

@@ -31,6 +31,22 @@ type Backend struct {
 	Servers []BackendServer // List of servers in this backend
 }
 
+// HAProxySrv represents a server slot in HAProxy (can be enabled or disabled)
+type HAProxySrv struct {
+	Name     string // Server name (e.g., SRV_1, SRV_2)
+	Address  string // IP address (empty string means disabled/maintenance)
+	Port     int    // Port number
+	Modified bool   // Whether this slot needs runtime update
+}
+
+// RuntimeBackend tracks the runtime state of a backend for dynamic updates
+type RuntimeBackend struct {
+	Name            string          // Backend name
+	Servers         []BackendServer // Current active servers
+	HAProxySrvs     []*HAProxySrv   // Pre-allocated server slots in HAProxy
+	DynUpdateFailed bool            // Flag indicating runtime update failed, needs config reload
+}
+
 // BackendEvent represents a change in backend configuration
 type BackendEvent struct {
 	Type    BackendEventType // Type of event (ADD, UPDATE, DELETE)
