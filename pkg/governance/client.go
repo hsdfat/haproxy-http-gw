@@ -48,8 +48,8 @@ func RegisterWithGovernance(log logger.Logger, notifyMiddleware func(payload *mo
 				Port:       config.ServicePort,
 			},
 		},
-		HealthCheckURL:  fmt.Sprintf("http://%s:%d/%s", config.ServiceIP, config.GovBackendPort, heartbeatUrl),
-		NotificationURL: fmt.Sprintf("http://%s:%d/%s", config.ServiceIP, config.GovBackendPort, notifyUrl),
+		HealthCheckURL:  fmt.Sprintf("http://%s:%d%s", config.ServiceIP, config.GovBackendPort, heartbeatUrl),
+		NotificationURL: fmt.Sprintf("http://%s:%d%s", config.ServiceIP, config.GovBackendPort, notifyUrl),
 		Subscriptions: []models.Subscription{{
 			ServiceName: models.ServiceNameEir,
 			ProviderIDs: []string{string(models.ProviderEIRHTTP)},

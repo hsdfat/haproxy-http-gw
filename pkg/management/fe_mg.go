@@ -30,7 +30,7 @@ func (c *ConfigExample) LoadConfig() (*gateway.FrontendConfig, error) {
 				Enabled: true,
 				Bindings: []gateway.BindingDefinition{
 					{
-						Address:  env.Env.ServiceIP,
+						Address:  "0.0.0.0",
 						Port:     env.Env.ServicePort,
 						Protocol: "http",
 						HTTP2:    true,

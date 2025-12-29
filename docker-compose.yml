@@ -30,3 +30,7 @@ volumes:
 networks:
   httpgw-net:
     driver: bridge
+
+# echo 'show servers state eir_be' | socat stdio /tmp/haproxy-gateway/haproxy-runtime-api.sock
+# echo 'show backend' | socat stdio /tmp/haproxy-gateway/haproxy-runtime-api.sock
+# echo 'show stat' | socat stdio /tmp/haproxy-gateway/haproxy-runtime-api.sock | awk -F',' '{print $1, $2, $18}' | grep -E "udr"

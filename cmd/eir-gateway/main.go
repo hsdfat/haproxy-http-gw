@@ -32,6 +32,7 @@ func main() {
 	}
 	// Use haproxyClient as needed...
 	management.Init(haproxyClient)
+	go management.InitHaproxyConfig()
 	var govClient *govclient.Client
 	var notifyMiddleware func(payload *models.NotificationPayload) = func(payload *models.NotificationPayload) {
 		log.Infow("Received governance notification",
@@ -54,10 +55,15 @@ func main() {
 				Port: int(pod.Port),
 			})
 		}
-		management.FM.RegisterBackend(management.EirId, gateway.Backend{
+		log.Infow("update eir backend", "backend", bes)
+		err = management.FM.RegisterBackend(management.EirId, gateway.Backend{
 			Name:    management.EirId + "_be",
 			Servers: bes,
 		})
+		if err != nil {
+			log.Errorw("Failed to update backend servers from notification", "error", err)
+			return
+		}
 		// Handle the notification as needed...
 	}
 	if env.Env.Governance {
