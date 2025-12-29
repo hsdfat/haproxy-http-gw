@@ -12,6 +12,7 @@ A dynamic HTTP gateway built on HAProxy with support for multiple frontends, dyn
 - **Zero-Downtime Reloads** - Graceful HAProxy configuration updates when necessary
 - **RESTful API** - Manage frontends and backends via HTTP API
 - **Runtime Socket API** - Direct access to HAProxy runtime socket information
+- **Path Statistics & Rate Limiting** - Track per-path metrics and protect against abuse with stick tables (standalone deployments only)
 
 ## Quick Start
 
@@ -45,6 +46,12 @@ See [docs/](docs/) directory for comprehensive documentation:
 - **[Multi-Frontend Setup](docs/multi-frontend-setup.md)** - Multi-frontend configuration and testing
 - **[Testing Guide](docs/testing-guide.md)** - Test environment and execution
 - **[Test Features](docs/test-features.md)** - Test features and capabilities
+
+### Stick Tables (Path Statistics & Rate Limiting)
+
+**Note**: Stick tables currently work with standalone HAProxy deployments only. Container-based deployments require API implementation.
+
+- **[Stick Tables Documentation](STICK_TABLES_IMPLEMENTATION.md)** - Complete implementation guide, configuration, and usage
 
 ## Architecture
 

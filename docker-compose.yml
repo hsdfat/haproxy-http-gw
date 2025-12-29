@@ -1,0 +1,32 @@
+services:
+  httpgw:
+    build:
+      context: .
+      dockerfile: cmd/eir-gateway/Dockerfile
+    image: eir-http-gateway
+    container_name: eir-httpgw
+    ports:
+      - "36110:36110"   # HTTP gateway port
+      - "2345:2345"
+      - "9090:9090"   # API/Stats port (if configured)
+    # volumes:
+    #   - ./misc/haproxy-init.cfg:/etc/haproxy/haproxy.cfg:ro
+    #   - ./misc/gateway-entrypoint.sh:/entrypoint.sh
+    environment:
+      - LOG_LEVEL=debug
+      - TARGET_GOV=192.168.13.67:36100
+      - SERVICE_IP=192.168.13.67
+      # - HAPROXY_RUNTIME_SOCKET=/tmp/http-gw/runtime.sock
+      # - HAPROXY_PID_FILE=/tmp/http-gw/haproxy.pidfile
+      # - HAPROXY_CONFIG=/etc/haproxy/haproxy.cfg
+      # - HAPROXY_BIN=/usr/local/sbin/haproxy
+    restart: unless-stopped
+    networks:
+      - httpgw-net
+
+volumes:
+  haproxy-runtime:
+
+networks:
+  httpgw-net:
+    driver: bridge
