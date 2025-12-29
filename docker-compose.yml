@@ -6,7 +6,7 @@ services:
     image: eir-http-gateway
     container_name: eir-httpgw
     ports:
-      - "36110:36110"   # HTTP gateway port
+      - "18200:18200"   # HTTP gateway port
       - "2345:2345"
       - "9090:9090"   # API/Stats port (if configured)
     # volumes:
@@ -14,12 +14,14 @@ services:
     #   - ./misc/gateway-entrypoint.sh:/entrypoint.sh
     environment:
       - LOG_LEVEL=debug
-      - TARGET_GOV=192.168.13.67:36100
-      - SERVICE_IP=192.168.13.67
-      # - HAPROXY_RUNTIME_SOCKET=/tmp/http-gw/runtime.sock
-      # - HAPROXY_PID_FILE=/tmp/http-gw/haproxy.pidfile
-      # - HAPROXY_CONFIG=/etc/haproxy/haproxy.cfg
-      # - HAPROXY_BIN=/usr/local/sbin/haproxy
+      - TARGET_GOV=192.168.1.9:18000
+      - SERVICE_IP=192.168.1.9
+      - SERVICE_PORT=18200
+      - HAPROXY_RUNTIME_SOCKET=/tmp/haproxy-gateway/haproxy-runtime-api.sock
+      - HAPROXY_PID_FILE=/tmp/haproxy-gateway/haproxy.pidfile
+      - HAPROXY_CONFIG=/etc/haproxy/haproxy.cfg
+      - HAPROXY_BIN=/usr/local/sbin/haproxy
+      - HAPROXY_TRANSACTION_DIR=/tmp/haproxy-gateway
     restart: unless-stopped
     networks:
       - httpgw-net

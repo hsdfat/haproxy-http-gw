@@ -32,13 +32,13 @@ func (e *EnvConfigs) DefaultValues() {
 	e.Governance = true
 	e.GovBackendPort = 2345
 	e.ServiceIP = GetLocalIP()
-	e.ServicePort = 36110
+	e.ServicePort = 18200
 	e.ConfdExpose = false
 }
 
-func (e *EnvConfigs) Print() {
+func (e *EnvConfigs) Print(log logger.Logger) {
 	// No-op, handled elsewhere
-	envconfig.Show(logger.Log.With("config", "env").(logger.Logger), e)
+	envconfig.Show(log.With("config", "env").(logger.Logger), e)
 }
 
 func GetLocalIP() string {

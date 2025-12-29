@@ -7,9 +7,9 @@ import (
 
 var Env EnvConfigs
 
-func Init() {
+func Init(log logger.Logger) {
 	err := envconfig.ReadConfigFrom("", &Env)
 	if err != nil {
-		logger.Log.Fatalf("Error loading env config: %v", err)
+		log.Fatalf("Error loading env config: %v", err)
 	}
 }
