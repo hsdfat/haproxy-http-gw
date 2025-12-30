@@ -138,7 +138,7 @@ func (i *Ingress) handleAnnotations(k store.K8s, h haproxy.HAProxy) {
 func HandleCfgMapAnnotations(k store.K8s, h haproxy.HAProxy, a annotations.Annotations) {
 	var err error
 	result := rules.List{}
-	logger.Tracef("Processing Ingress annotations in ConfigMap")
+	logger.Debugf("Processing Ingress annotations in ConfigMap")
 	for _, a := range a.Frontend(nil, &result, h.Maps) {
 		err = a.Process(k, k.ConfigMaps.Main.Annotations)
 		if err != nil {
@@ -197,7 +197,7 @@ func (i *Ingress) Update(k store.K8s, h haproxy.HAProxy, a annotations.Annotatio
 		}
 	}
 	// Ingress secrets
-	logger.Tracef("Ingress '%s/%s': processing secrets...", i.resource.Namespace, i.resource.Name)
+	logger.Debugf("Ingress '%s/%s': processing secrets...", i.resource.Namespace, i.resource.Name)
 	secretManager := secret.NewManager(k, h)
 	for _, tls := range i.resource.TLS {
 		if tls.SecretName == "" {
@@ -216,7 +216,7 @@ func (i *Ingress) Update(k store.K8s, h haproxy.HAProxy, a annotations.Annotatio
 		logger.Debugf("Ingress %s/%s: no rules defined", i.resource.Namespace, i.resource.Name)
 		return
 	}
-	logger.Tracef("Ingress '%s/%s': processing annotations...", i.resource.Namespace, i.resource.Name)
+	logger.Debugf("Ingress '%s/%s': processing annotations...", i.resource.Namespace, i.resource.Name)
 	enabled, err := annotations.Bool("ssl-passthrough", i.resource.Annotations, k.ConfigMaps.Main.Annotations)
 	if err != nil {
 		logger.Error("Ingress '%s/%s': SSL Passthrough parsing: %s", i.resource.Namespace, i.resource.Name, err)
@@ -226,7 +226,7 @@ func (i *Ingress) Update(k store.K8s, h haproxy.HAProxy, a annotations.Annotatio
 	}
 	i.handleAnnotations(k, h)
 	// Ingress rules
-	logger.Tracef("ingress '%s/%s': processing rules...", i.resource.Namespace, i.resource.Name)
+	logger.Debugf("ingress '%s/%s': processing rules...", i.resource.Namespace, i.resource.Name)
 	for _, rule := range i.resource.Rules {
 		for _, path := range rule.Paths {
 			if err := i.handlePath(k, h, rule.Host, path, a); err != nil {

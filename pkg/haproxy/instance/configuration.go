@@ -41,7 +41,7 @@ func (cmi *configurationManagerImpl) SetReload(reason string, args ...any) {
 	if !cmi.validReason(reason) {
 		return
 	}
-	cmi.logger.InfoSkipCallerf("reload required : "+reason, args...)
+	cmi.logger.Infow("reload required: "+reason, args...)
 }
 
 func (cmi *configurationManagerImpl) Reset() {
@@ -60,7 +60,7 @@ func (cmi *configurationManagerImpl) SetReloadIf(reload bool, reason string, arg
 	if !cmi.validReason(reason) {
 		return
 	}
-	cmi.logger.InfoSkipCallerf("reload required : "+reason, args...)
+	cmi.logger.Infow("reload required: "+reason, args...)
 }
 
 func (cmi *configurationManagerImpl) validReason(reason string) bool {

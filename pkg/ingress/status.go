@@ -40,7 +40,7 @@ func (i *Ingress) UpdateStatus(client *kubernetes.Clientset) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to update LoadBalancer status of ingress %s/%s: %w", i.resource.Namespace, i.resource.Name, err)
 	}
-	logger.Tracef("Successful update of LoadBalancer status in ingress %s/%s", i.resource.Namespace, i.resource.Name)
+	logger.Debugf("Successful update of LoadBalancer status in ingress %s/%s", i.resource.Namespace, i.resource.Name)
 	// Allow to store the publish service addresses affected to the ingress for future comparison in update test.
 	return nil
 }

@@ -299,7 +299,7 @@ func (handler *HTTPS) deleteHTTPSFrontendBinds(h haproxy.HAProxy) {
 	bindsToDelete := []string{BIND_IP_V4, BIND_IP_V6, BIND_UNIX_SOCKET}
 	for _, bind := range bindsToDelete {
 		if err := h.FrontendBindDelete(h.FrontHTTPS, bind); err != nil {
-			logger.Tracef("cannot delete bind %s: %s", bind, err)
+			logger.Debugf("cannot delete bind %s: %s", bind, err)
 		}
 	}
 }

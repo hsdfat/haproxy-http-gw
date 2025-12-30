@@ -17,6 +17,10 @@ const (
 	EirId = "eir"
 )
 
+// ReloadCallback is called after HAProxy is successfully reloaded
+// It's used to re-register backends that were registered via runtime socket
+type ReloadCallback func()
+
 type ConfigExample struct{}
 
 func (c *ConfigExample) LoadConfig() (*gateway.FrontendConfig, error) {
@@ -79,7 +83,7 @@ func Init(client api.HAProxyClient) {
 	FM = gateway.NewFrontendManager(client, *config)
 }
 
-func InitHaproxyConfig() {
+func InitHaproxyConfig(reloadCallback ReloadCallback) {
 
 	log := logger.Haproxy
 	ctx, cancel := context.WithCancel(context.Background())
@@ -95,13 +99,26 @@ func InitHaproxyConfig() {
 	enhancedAPI := gateway.NewEnhancedAPIServer(FM, apiPort)
 	addDefautltBackendRoute(FM, EirId)
 
+	// Trigger immediate reload to activate the newly created frontend
+	time.Sleep(500 * time.Millisecond) // Brief delay to ensure frontend is written to config
+	if err := reloadHaproxyConfig(); err != nil {
+		log.Errorf("Failed to reload HAProxy after frontend creation: %v", err)
+	} else {
+		log.Info("HAProxy reloaded successfully after frontend creation")
+		// Call the callback to re-register backends after initial reload
+		if reloadCallback != nil {
+			log.Info("Executing reload callback to restore backend state...")
+			reloadCallback()
+		}
+	}
+
 	go func() {
 		if err := enhancedAPI.Start(); err != nil {
 			log.Errorf("Error starting Enhanced API Server: %v", err)
 		}
 	}()
 
-	go monitorHaproxyReload(ctx)
+	go monitorHaproxyReload(ctx, reloadCallback)
 
 	sigChan := make(chan os.Signal, 1)
 	go func() {
@@ -136,7 +153,7 @@ func addDefautltBackendRoute(fm *gateway.FrontendManager, id string) {
 	)
 }
 
-func monitorHaproxyReload(ctx context.Context) {
+func monitorHaproxyReload(ctx context.Context, reloadCallback ReloadCallback) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
@@ -150,6 +167,11 @@ func monitorHaproxyReload(ctx context.Context) {
 				} else {
 					logger.Haproxy.Info("HAProxy reloaded successfully")
 					instance.Reset()
+					// Call the callback to re-register backends after reload
+					if reloadCallback != nil {
+						logger.Haproxy.Info("Executing reload callback to restore backend state...")
+						reloadCallback()
+					}
 				}
 			}
 		case <-ctx.Done():

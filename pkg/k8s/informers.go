@@ -142,7 +142,7 @@ func (k k8s) getServiceInformer(eventChan chan k8ssync.SyncDataEvent, factory in
 				return
 			}
 			if data.Spec.Type == corev1.ServiceTypeExternalName && k.disableSvcExternalName {
-				logger.Tracef("forwarding to ExternalName Services for %v is disabled", data)
+				logger.Debugf("forwarding to ExternalName Services for %v is disabled", data)
 				return
 			}
 			status := store.ADDED
@@ -173,7 +173,7 @@ func (k k8s) getServiceInformer(eventChan chan k8ssync.SyncDataEvent, factory in
 				// item copy because of ADDED handler in events.go which must modify the STATUS based solely on addresses
 				itemCopy := *item
 				itemCopy.Addresses = getServiceAddresses(data)
-				logger.Tracef("[RUNTIME] [K8s] %s %s: %s", k8ssync.PUBLISH_SERVICE, item.Status, item.Name)
+				logger.Debugf("[RUNTIME] [K8s] %s %s: %s", k8ssync.PUBLISH_SERVICE, item.Status, item.Name)
 				eventChan <- k8ssync.SyncDataEvent{
 					SyncType:  k8ssync.PUBLISH_SERVICE,
 					Namespace: item.Namespace,
@@ -205,7 +205,7 @@ func (k k8s) getServiceInformer(eventChan chan k8ssync.SyncDataEvent, factory in
 			eventChan <- ToSyncDataEvent(item, item, data.UID, data.ResourceVersion)
 			if k.publishSvc != nil && k.publishSvc.Namespace == item.Namespace && k.publishSvc.Name == item.Name {
 				item.Addresses = getServiceAddresses(data)
-				logger.Tracef("[RUNTIME] [K8s] %s %s: %s", k8ssync.PUBLISH_SERVICE, item.Status, item.Name)
+				logger.Debugf("[RUNTIME] [K8s] %s %s: %s", k8ssync.PUBLISH_SERVICE, item.Status, item.Name)
 				eventChan <- k8ssync.SyncDataEvent{
 					SyncType:  k8ssync.PUBLISH_SERVICE,
 					Namespace: data.Namespace,
@@ -221,7 +221,7 @@ func (k k8s) getServiceInformer(eventChan chan k8ssync.SyncDataEvent, factory in
 				return
 			}
 			if data1.Spec.Type == corev1.ServiceTypeExternalName && k.disableSvcExternalName {
-				logger.Tracef("forwarding to ExternalName Services for %v is disabled", data1)
+				logger.Debugf("forwarding to ExternalName Services for %v is disabled", data1)
 				return
 			}
 			data2, ok := newObj.(*corev1.Service)
@@ -230,7 +230,7 @@ func (k k8s) getServiceInformer(eventChan chan k8ssync.SyncDataEvent, factory in
 				return
 			}
 			if data2.Spec.Type == corev1.ServiceTypeExternalName && k.disableSvcExternalName {
-				logger.Tracef("forwarding to ExternalName Services for %v is disabled", data2)
+				logger.Debugf("forwarding to ExternalName Services for %v is disabled", data2)
 				return
 			}
 
@@ -259,7 +259,7 @@ func (k k8s) getServiceInformer(eventChan chan k8ssync.SyncDataEvent, factory in
 
 			if k.publishSvc != nil && k.publishSvc.Namespace == item2.Namespace && k.publishSvc.Name == item2.Name {
 				item2.Addresses = getServiceAddresses(data2)
-				logger.Tracef("[RUNTIME] [K8s] %s %s: %s", k8ssync.PUBLISH_SERVICE, item2.Status, item2.Name)
+				logger.Debugf("[RUNTIME] [K8s] %s %s: %s", k8ssync.PUBLISH_SERVICE, item2.Status, item2.Name)
 				eventChan <- k8ssync.SyncDataEvent{
 					SyncType:  k8ssync.PUBLISH_SERVICE,
 					Namespace: item2.Namespace,
@@ -886,7 +886,7 @@ func manageGatewayClass(gatewayclass *gatewayv1beta1.GatewayClass, eventChan cha
 		Generation:     gatewayclass.Generation,
 		Status:         status,
 	}
-	logger.Tracef("[RUNTIME] [K8s] %s %s: %s", k8ssync.GATEWAYCLASS, item.Status, item.Name)
+	logger.Debugf("[RUNTIME] [K8s] %s %s: %s", k8ssync.GATEWAYCLASS, item.Status, item.Name)
 	eventChan <- k8ssync.SyncDataEvent{SyncType: k8ssync.GATEWAYCLASS, Data: &item}
 }
 
@@ -933,7 +933,7 @@ func manageGateway(gateway *gatewayv1beta1.Gateway, eventChan chan k8ssync.SyncD
 		Generation:       gateway.Generation,
 		Status:           status,
 	}
-	logger.Tracef("[RUNTIME] [K8s] %s %s: %s", k8ssync.GATEWAY, item.Status, item.Name)
+	logger.Debugf("[RUNTIME] [K8s] %s %s: %s", k8ssync.GATEWAY, item.Status, item.Name)
 	eventChan <- k8ssync.SyncDataEvent{SyncType: k8ssync.GATEWAY, Namespace: item.Namespace, Data: &item}
 }
 
@@ -996,7 +996,7 @@ func manageTCPRoute(tcproute *gatewayv1alpha2.TCPRoute, eventChan chan k8ssync.S
 		Generation:   tcproute.Generation,
 		Status:       status,
 	}
-	logger.Tracef("[RUNTIME] [K8s] %s %s: %s", k8ssync.TCPROUTE, item.Status, item.Name)
+	logger.Debugf("[RUNTIME] [K8s] %s %s: %s", k8ssync.TCPROUTE, item.Status, item.Name)
 	eventChan <- k8ssync.SyncDataEvent{SyncType: k8ssync.TCPROUTE, Namespace: item.Namespace, Data: &item}
 }
 
@@ -1070,6 +1070,6 @@ func manageReferenceGrant(referenceGrant *gatewayv1alpha2.ReferenceGrant, eventC
 		}
 	}
 
-	logger.Tracef("[RUNTIME] [K8s] %s %s: %s", k8ssync.REFERENCEGRANT, item.Status, item.Name)
+	logger.Debugf("[RUNTIME] [K8s] %s %s: %s", k8ssync.REFERENCEGRANT, item.Status, item.Name)
 	eventChan <- k8ssync.SyncDataEvent{SyncType: k8ssync.REFERENCEGRANT, Namespace: item.Namespace, Data: &item}
 }

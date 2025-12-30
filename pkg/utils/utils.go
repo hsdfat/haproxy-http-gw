@@ -109,12 +109,12 @@ func GetBoolValue(dataValue, dataName string) (result bool, err error) {
 	if err != nil {
 		switch strings.ToLower(dataValue) {
 		case "enabled", "on":
-			logger := GetLogger()
-			logger.Warningf(`%s - [%s] is DEPRECATED, use "true" or "false"`, dataName, dataValue)
+			log := GetLogger()
+			log.Warnw("Deprecated value", "field", dataName, "value", dataValue, "message", `use "true" or "false"`)
 			result = true
 		case "disabled", "off":
-			logger := GetLogger()
-			logger.Warningf(`%s - [%s] is DEPRECATED, use "true" or "false"`, dataName, dataValue)
+			log := GetLogger()
+			log.Warnw("Deprecated value", "field", dataName, "value", dataValue, "message", `use "true" or "false"`)
 			result = false
 		default:
 			return false, err
@@ -224,7 +224,7 @@ func JSONDiff(diffs map[string][]interface{}) string {
 	var diffRule []byte
 	var errM error
 	if diffRule, errM = json.Marshal(diffs); errM != nil {
-		GetLogger().Errorf("Error marshalling diffs: %v", errM)
+		GetLogger().Errorw("Error marshalling diffs", "error", errM)
 		return ""
 	}
 	return string(diffRule)

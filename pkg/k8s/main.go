@@ -103,25 +103,25 @@ type k8s struct {
 }
 
 func New(osArgs utils.OSArgs, whitelist map[string]struct{}, publishSvc *utils.NamespaceValue) K8s { //nolint:ireturn
-	logger.SetLevel(osArgs.LogLevel.LogLevel)
+	//logger.SetLevel(osArgs.LogLevel.LogLevel)
 	restconfig, err := GetRestConfig(osArgs)
 	logger.Panic(err)
 	builtInClient := k8sclientset.NewForConfigOrDie(restconfig)
 	if k8sVersion, errVer := builtInClient.Discovery().ServerVersion(); errVer != nil {
 		logger.Panicf("Unable to get Kubernetes version: %v\n", errVer)
 	} else {
-		logger.Printf("Running on Kubernetes version: %s %s", k8sVersion.String(), k8sVersion.Platform)
+		logger.Debugf("Running on Kubernetes version: %s %s", k8sVersion.String(), k8sVersion.Platform)
 	}
 
 	gatewayClient, err := gatewayclientset.NewForConfig(restconfig)
 	if err != nil {
-		logger.Print("Gateway API not present")
+		logger.Debug("Gateway API not present")
 	}
 	gatewayRestClient, err := client.New(restconfig, client.Options{
 		Scheme: scheme.Scheme,
 	})
 	if err != nil {
-		logger.Print("Gateway API not present")
+		logger.Debug("Gateway API not present")
 	}
 
 	crdClient, err := crdclientset.NewForConfig(restconfig)
@@ -384,7 +384,7 @@ func GetRestConfig(osArgs utils.OSArgs) (restConfig *rest.Config, err error) {
 	if err != nil {
 		return restConfig, err
 	}
-	restConfig.WarningHandler = logger
+	// restConfig.WarningHandler = logger
 	return restConfig, err
 }
 

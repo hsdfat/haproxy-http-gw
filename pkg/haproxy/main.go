@@ -99,5 +99,5 @@ func logVersion(program string) {
 		return
 	}
 	haproxyInfo := strings.Split(string(res), "\n")
-	logger.Printf("Running with %s", haproxyInfo[0])
+	logger.Debugf("Running with %s", haproxyInfo[0])
 }

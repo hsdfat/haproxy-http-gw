@@ -172,14 +172,25 @@ func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 
 	if exists {
 		// Try runtime update first (no reload)
-		logger.Tracef("[RUNTIME] Attempting runtime update for backend %s", backend.Name)
-		if err := m.tryRuntimeUpdate(existing, backend); err == nil {
-			logger.Infof("[RUNTIME] Successfully updated backend %s via runtime socket (no reload)", backend.Name)
+		logger.Debugf("[RUNTIME] Attempting runtime update for backend %s", backend.Name)
+		changed, err := m.tryRuntimeUpdate(existing, backend)
+		if err == nil {
+			if changed {
+				logger.Infof("[RUNTIME] Successfully updated backend %s via runtime socket (no reload)", backend.Name)
+			} else {
+				logger.Infof("[RUNTIME] Backend %s unchanged, skipping update", backend.Name)
+			}
 
 			// Update in-memory state
 			m.mu.Lock()
 			existing.Servers = backend.Servers
 			m.mu.Unlock()
+
+			// NOTE: Runtime socket updates are NOT persisted to the config file
+			// This is by design in HAProxy - runtime changes are ephemeral
+			// The governance system handles re-registration after reloads
+			// Persistence would require a reload, defeating the purpose of runtime updates
+
 			return nil
 		} else {
 			// Runtime failed, fall through to config update
@@ -192,12 +203,13 @@ func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 }
 
 // tryRuntimeUpdate attempts to update backend servers via HAProxy runtime socket
-func (m *Manager) tryRuntimeUpdate(existing *RuntimeBackend, newBackend *Backend) error {
-	logger.Tracef("[RUNTIME] [BACKEND] [SERVER] updating backend %s for haproxy servers update (address and state) through socket", newBackend.Name)
+// Returns (changed bool, error) where changed indicates if any servers were actually updated
+func (m *Manager) tryRuntimeUpdate(existing *RuntimeBackend, newBackend *Backend) (bool, error) {
+	logger.Debugf("[RUNTIME] [BACKEND] [SERVER] updating backend %s for haproxy servers update (address and state) through socket", newBackend.Name)
 
 	// Check if we have enough server slots
 	if len(newBackend.Servers) > len(existing.HAProxySrvs) {
-		return fmt.Errorf("not enough server slots (%d needed, %d available)", len(newBackend.Servers), len(existing.HAProxySrvs))
+		return false, fmt.Errorf("not enough server slots (%d needed, %d available)", len(newBackend.Servers), len(existing.HAProxySrvs))
 	}
 
 	// Build runtime server data
@@ -209,7 +221,7 @@ func (m *Manager) tryRuntimeUpdate(existing *RuntimeBackend, newBackend *Backend
 
 		// Check if server changed
 		if slot.Address != newSrv.IP || slot.Port != newSrv.Port {
-			logger.Tracef("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s': addr '%s:%d' changed status to ready",
+			logger.Debugf("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s': addr '%s:%d' changed status to ready",
 				newBackend.Name, slot.Name, newSrv.IP, newSrv.Port)
 			runtimeData = append(runtimeData, api.RuntimeServerData{
 				BackendName: newBackend.Name,
@@ -230,7 +242,7 @@ func (m *Manager) tryRuntimeUpdate(existing *RuntimeBackend, newBackend *Backend
 	for i := len(newBackend.Servers); i < len(existing.HAProxySrvs); i++ {
 		slot := existing.HAProxySrvs[i]
 		if slot.Address != "" {
-			logger.Tracef("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s' changed status to maint",
+			logger.Debugf("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s' changed status to maint",
 				newBackend.Name, slot.Name)
 			runtimeData = append(runtimeData, api.RuntimeServerData{
 				BackendName: newBackend.Name,
@@ -252,16 +264,20 @@ func (m *Manager) tryRuntimeUpdate(existing *RuntimeBackend, newBackend *Backend
 		err := m.haproxyClient.SetServerAddrAndState(runtimeData)
 		if err != nil {
 			existing.DynUpdateFailed = true
-			return fmt.Errorf("runtime socket update failed: %w", err)
+			return false, fmt.Errorf("runtime socket update failed: %w", err)
 		}
 
 		// Reset modified flags
 		for _, slot := range existing.HAProxySrvs {
 			slot.Modified = false
 		}
+
+		// Return true to indicate changes were made
+		return true, nil
 	}
 
-	return nil
+	// No changes were needed
+	return false, nil
 }
 
 // configUpdate performs a full config-based backend update with server slot pre-allocation
@@ -324,7 +340,7 @@ func (m *Manager) configUpdate(backend *Backend) error {
 		if err := m.haproxyClient.BackendServerCreate(backend.Name, server); err != nil {
 			logger.Errorf("[CONFIG] Failed to create server %s in backend %s: %v", server.Name, backend.Name, err)
 		} else {
-			logger.Tracef("[CONFIG] [BACKEND] [SERVER] Added server %s (%s:%d) to backend %s",
+			logger.Debugf("[CONFIG] [BACKEND] [SERVER] Added server %s (%s:%d) to backend %s",
 				server.Name, srv.IP, srv.Port, backend.Name)
 		}
 
@@ -351,7 +367,7 @@ func (m *Manager) configUpdate(backend *Backend) error {
 			logger.Errorf("[CONFIG] Failed to create disabled server slot %s in backend %s: %v",
 				server.Name, backend.Name, err)
 		} else {
-			logger.Tracef("[CONFIG] [BACKEND] [SERVER] Added disabled server slot %s to backend %s",
+			logger.Debugf("[CONFIG] [BACKEND] [SERVER] Added disabled server slot %s to backend %s",
 				server.Name, backend.Name)
 		}
 
@@ -380,6 +396,81 @@ func (m *Manager) configUpdate(backend *Backend) error {
 
 	logger.Infof("[CONFIG] Successfully synced backend %s with %d servers (%d total slots)",
 		backend.Name, len(backend.Servers), totalSlots)
+	return nil
+}
+
+// persistRuntimeUpdate updates the config file after a runtime socket update (without triggering reload)
+// This ensures that runtime changes survive HAProxy reloads
+func (m *Manager) persistRuntimeUpdate(backend *Backend) error {
+	logger.Debugf("[CONFIG] Persisting runtime update for backend %s to config file", backend.Name)
+
+	// Serialize transactions to avoid race conditions
+	m.txMu.Lock()
+	defer m.txMu.Unlock()
+
+	// Start transaction
+	if err := m.haproxyClient.APIStartTransaction(); err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer m.haproxyClient.APIDisposeTransaction()
+
+	// Get runtime backend state
+	m.mu.RLock()
+	existing, exists := m.runtimeBackends[backend.Name]
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("backend %s not found in runtime state", backend.Name)
+	}
+
+	// Delete all existing servers first
+	if err := m.haproxyClient.BackendServerDeleteAll(backend.Name); err != nil {
+		logger.Debugf("[CONFIG] No servers to delete in backend %s", backend.Name)
+	}
+
+	// Re-create servers matching current runtime state
+	for i, slot := range existing.HAProxySrvs {
+		var server models.Server
+
+		if i < len(backend.Servers) {
+			// Active server
+			srv := backend.Servers[i]
+			server = models.Server{
+				Name:    slot.Name,
+				Address: srv.IP,
+				Port:    utils.PtrInt64(int64(srv.Port)),
+				ServerParams: models.ServerParams{
+					Maintenance: "disabled",
+				},
+			}
+		} else {
+			// Disabled slot
+			server = models.Server{
+				Name:    slot.Name,
+				Address: "127.0.0.1",
+				Port:    utils.PtrInt64(1),
+				ServerParams: models.ServerParams{
+					Maintenance: "enabled",
+				},
+			}
+		}
+
+		if err := m.haproxyClient.BackendServerCreate(backend.Name, server); err != nil {
+			logger.Errorf("[CONFIG] Failed to create server %s in backend %s: %v", server.Name, backend.Name, err)
+		}
+	}
+
+	// Save the configuration to disk BEFORE committing (while transaction is still active)
+	if err := m.haproxyClient.APISaveConfiguration(); err != nil {
+		return fmt.Errorf("failed to save configuration to disk: %w", err)
+	}
+
+	// Commit transaction (validates and applies the configuration)
+	if err := m.haproxyClient.APICommitTransaction(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	logger.Infof("[CONFIG] Config file saved to disk for backend %s with %d active servers", backend.Name, len(backend.Servers))
 	return nil
 }
 

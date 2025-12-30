@@ -49,7 +49,7 @@ func (handler ProxyProtocol) Update(k store.K8s, h haproxy.HAProxy, a annotation
 		}
 	}
 	// Configure Annotation
-	logger.Trace("Configuring ProxyProtcol annotation")
+	logger.Debug("Configuring ProxyProtcol annotation")
 	frontends := []string{h.FrontHTTP, h.FrontHTTPS}
 	if haproxy.SSLPassthrough {
 		frontends = []string{h.FrontHTTP, h.FrontSSL}

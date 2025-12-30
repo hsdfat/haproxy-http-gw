@@ -14,11 +14,11 @@ services:
     #   - ./misc/gateway-entrypoint.sh:/entrypoint.sh
     environment:
       - LOG_LEVEL=debug
-      - TARGET_GOV=192.168.1.9:18000
-      - SERVICE_IP=192.168.1.9
+      - TARGET_GOV=192.168.2.179:18000
+      - SERVICE_IP=192.168.2.179
       - SERVICE_PORT=18200
       - HAPROXY_RUNTIME_SOCKET=/tmp/haproxy-gateway/haproxy-runtime-api.sock
-      - HAPROXY_PID_FILE=/tmp/haproxy-gateway/haproxy.pidfile
+      - HAPROXY_PID_FILE=/tmp/haproxy-gateway/haproxy.pid
       - HAPROXY_CONFIG=/etc/haproxy/haproxy.cfg
       - HAPROXY_BIN=/usr/local/sbin/haproxy
       - HAPROXY_TRANSACTION_DIR=/tmp/haproxy-gateway

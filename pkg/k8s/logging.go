@@ -21,7 +21,7 @@ import (
 )
 
 func logIncomingK8sEvent(logger utils.Logger, meta k8smeta.MetaInfoer, uid types.UID, resourceVersion string, additionalInfo ...string) {
-	logger.Tracef("[RUNTIME] [K8s] %s %s: %s %s/%s ",
+	logger.Debugf("[RUNTIME] [K8s] %s %s: %s %s/%s ",
 		meta.GetType(),
 		meta.GetStatus(),
 		meta.GetName(),

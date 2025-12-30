@@ -28,6 +28,7 @@ func (e *EnvConfigs) DefaultValues() {
 	e.TransactionDir = "/tmp/haproxy-gateway"
 	e.ConfigFile = "/etc/haproxy/haproxy.cfg"
 	e.HaproxyBinary = "/usr/local/sbin/haproxy"
+	e.HaproxyPIDFile = "/tmp/haproxy-gateway/haproxy.pid"
 	e.TargetGov = "127.0.0.1:36610"
 	e.Governance = true
 	e.GovBackendPort = 2345
@@ -36,9 +37,20 @@ func (e *EnvConfigs) DefaultValues() {
 	e.ConfdExpose = false
 }
 
-func (e *EnvConfigs) Print(log logger.Logger) {
+func (e *EnvConfigs) Print() {
 	// No-op, handled elsewhere
-	envconfig.Show(log.With("config", "env").(logger.Logger), e)
+	// Logger will be set via SetLogger before calling Print
+	if configLogger != nil {
+		envconfig.Show(configLogger.With("config", "env").(logger.Logger), e)
+	} else {
+		envconfig.Show(logger.Log.With("config", "env").(logger.Logger), e)
+	}
+}
+
+var configLogger logger.Logger
+
+func SetLogger(log logger.Logger) {
+	configLogger = log
 }
 
 func GetLocalIP() string {

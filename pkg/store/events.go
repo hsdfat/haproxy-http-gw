@@ -148,33 +148,33 @@ func (k *K8s) EventEndpoints(ns *Namespace, data *Endpoints, syncHAproxySrvs fun
 	if endpoints, ok := ns.Endpoints[data.Service][data.SliceName]; ok {
 		if data.Status != DELETED && endpoints.Equal(data) {
 			if data != nil {
-				logger.Tracef("[RUNTIME] [BACKEND] [SERVER] [No change] [EventEndpoints]. No change for %s %s %s", data.Status, data.Service, data.SliceName)
+				logger.Debugf("[RUNTIME] [BACKEND] [SERVER] [No change] [EventEndpoints]. No change for %s %s %s", data.Status, data.Service, data.SliceName)
 			}
 			return false
 		}
 	}
-	logger.Tracef("Treating endpoints event %+v", *data)
+	logger.Debugf("Treating endpoints event %+v", *data)
 	ns.Endpoints[data.Service][data.SliceName] = data
 
 	endpoints := getEndpoints(ns.Endpoints[data.Service])
-	logger.Tracef("service %s : endpoints list %+v", data.Service, endpoints)
+	logger.Debugf("service %s : endpoints list %+v", data.Service, endpoints)
 	_, ok := ns.HAProxyRuntime[data.Service]
 	if !ok {
 		ns.HAProxyRuntime[data.Service] = make(map[string]*RuntimeBackend)
 	}
-	logger.Tracef("service %s : number of already existing backend(s) in this transaction for this endpoint: %d", data.Service, len(ns.HAProxyRuntime[data.Service]))
+	logger.Debugf("service %s : number of already existing backend(s) in this transaction for this endpoint: %d", data.Service, len(ns.HAProxyRuntime[data.Service]))
 	// Standalone
 	_, ok = ns.HAProxyRuntimeStandalone[data.Service]
 	if !ok {
 		ns.HAProxyRuntimeStandalone[data.Service] = make(map[string]map[string]*RuntimeBackend)
 	}
 	for key, value := range ns.HAProxyRuntime[data.Service] {
-		logger.Tracef("service %s : port name %s, backend %+v", data.Service, key, *value)
+		logger.Debugf("service %s : port name %s, backend %+v", data.Service, key, *value)
 	}
 	// Standalone
 	for portName, backendsNames := range ns.HAProxyRuntimeStandalone[data.Service] {
 		for backendName := range backendsNames {
-			logger.Tracef("service %s : port name %s, backend %+v", data.Service, portName, backendName)
+			logger.Debugf("service %s : port name %s, backend %+v", data.Service, portName, backendName)
 		}
 	}
 	if len(endpoints) == 0 {

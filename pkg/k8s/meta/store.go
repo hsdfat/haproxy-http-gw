@@ -68,7 +68,7 @@ func (rv *ProcessedResourceVersionSafe) IsProcessed(meta MetaInfoer, uid types.U
 	}
 	// By safety, if uid or resourceVersion are empty, consider it as not processed
 	if uid == "" || resourceVersion == "" {
-		rv.logger.Tracef("uid or resourceVersion is empty for %s", rv.getKeyFunc(meta, uid))
+		rv.logger.Debugw("uid or resourceVersion is empty", "key", rv.getKeyFunc(meta, uid))
 		return false
 	}
 	return v == resourceVersion
@@ -80,7 +80,7 @@ func (rv *ProcessedResourceVersionSafe) Set(meta MetaInfoer, uid types.UID, reso
 
 	// By safety, if uid or resourceVersion are empty, do not store
 	if uid == "" || resourceVersion == "" {
-		rv.logger.Tracef("uid or resourceVersion is empty for %s", rv.getKeyFunc(meta, uid))
+		rv.logger.Debugw("uid or resourceVersion is empty", "key", rv.getKeyFunc(meta, uid))
 		return
 	}
 	objType := string(meta.GetType())

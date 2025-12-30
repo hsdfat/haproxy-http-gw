@@ -32,6 +32,7 @@ type HAProxyClient interface { //nolint:interfacebloat
 	APICommitTransaction() error
 	APIFinalCommitTransaction() error
 	APIDisposeTransaction()
+	APISaveConfiguration() error
 	ACL
 	BackendsGet() models.Backends
 	BackendGet(backendName string) (*models.Backend, error)
@@ -188,6 +189,7 @@ type clientNative struct {
 	backends                            map[string]Backend
 	previousBackends                    []byte
 	configurationHashAtTransactionStart string
+	configFile                          string
 }
 
 func New(transactionDir, configFile, programPath, runtimeSocket string) (client HAProxyClient, err error) { //nolint:ireturn
@@ -222,8 +224,9 @@ func New(transactionDir, configFile, programPath, runtimeSocket string) (client 
 	}
 
 	cn := clientNative{
-		nativeAPI: cnHAProxyClient,
-		backends:  make(map[string]Backend),
+		nativeAPI:  cnHAProxyClient,
+		backends:   make(map[string]Backend),
+		configFile: configFile,
 	}
 	return &cn, nil
 }
@@ -329,6 +332,28 @@ func (c *clientNative) APIFinalCommitTransaction() error {
 func (c *clientNative) APIDisposeTransaction() {
 	logger.ResetFields()
 	c.activeTransaction = ""
+}
+
+// APISaveConfiguration saves the current transaction's configuration to disk
+// NOTE: This must be called BEFORE APICommitTransaction() while the transaction is still active
+func (c *clientNative) APISaveConfiguration() error {
+	configuration, err := c.nativeAPI.Configuration()
+	if err != nil {
+		return err
+	}
+
+	// Get the parser for the active transaction (with uncommitted changes)
+	parser, err := configuration.GetParser(c.activeTransaction)
+	if err != nil {
+		return err
+	}
+
+	// Save the configuration to disk
+	if err := parser.Save(c.configFile); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *clientNative) SetAuxCfgFile(auxCfgFile string) {

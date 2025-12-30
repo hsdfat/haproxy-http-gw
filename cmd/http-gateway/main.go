@@ -27,13 +27,13 @@ import (
 	"github.com/haproxytech/kubernetes-ingress/pkg/gateway/examples"
 	"github.com/haproxytech/kubernetes-ingress/pkg/haproxy/api"
 	"github.com/haproxytech/kubernetes-ingress/pkg/haproxy/instance"
+	"github.com/haproxytech/kubernetes-ingress/pkg/logger"
 	"github.com/haproxytech/kubernetes-ingress/pkg/utils"
 	"github.com/jessevdk/go-flags"
 )
 
 func main() {
-	logger := utils.GetLogger()
-	logger.SetLevel(utils.Info)
+	log := logger.New("http-gw", "info")
 
 	// Parse command-line flags
 	var osArgs utils.OSArgs
@@ -42,7 +42,7 @@ func main() {
 		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
 			os.Exit(0)
 		}
-		logger.Error(err)
+		log.Error(err)
 		os.Exit(1)
 	}
 
@@ -51,7 +51,7 @@ func main() {
 	if runtimeSocket == "" {
 		runtimeSocket = "/var/run/haproxy-runtime-api.sock"
 	}
-	logger.Infof("Using HAProxy runtime socket: %s", runtimeSocket)
+	log.Infow("Using HAProxy runtime socket", "socket", runtimeSocket)
 
 	// Initialize HAProxy API client
 	haproxyClient, err := api.New(
@@ -61,22 +61,22 @@ func main() {
 		runtimeSocket,                    // runtime socket
 	)
 	if err != nil {
-		logger.Error(err)
+		log.Error(err)
 		os.Exit(1)
 	}
 
 	// Check if frontend config file is specified
 	if osArgs.FrontendConfigFile != "" {
-		logger.Infof("Starting with frontend management mode (config: %s)", osArgs.FrontendConfigFile)
+		log.Infow("Starting with frontend management mode", "config", osArgs.FrontendConfigFile)
 		runFrontendManagementMode(haproxyClient, osArgs)
 	} else {
-		logger.Info("Starting in legacy mode (single frontend)")
+		log.Infow("Starting in legacy mode (single frontend)")
 		runSimpleProviderExample(haproxyClient)
 	}
 }
 
 // monitorHAProxyReload monitors the reload flag and triggers HAProxy reload when needed
-func monitorHAProxyReload(ctx context.Context, logger utils.Logger) {
+func monitorHAProxyReload(ctx context.Context, log logger.Logger) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -86,11 +86,11 @@ func monitorHAProxyReload(ctx context.Context, logger utils.Logger) {
 			return
 		case <-ticker.C:
 			if instance.NeedReload() {
-				logger.Info("Reloading HAProxy due to backend update...")
-				if err := reloadHAProxy(logger); err != nil {
-					logger.Errorf("Failed to reload HAProxy: %v", err)
+				log.Infow("Reloading HAProxy due to backend update...")
+				if err := reloadHAProxy(log); err != nil {
+					log.Errorw("Failed to reload HAProxy", "error", err)
 				} else {
-					logger.Info("HAProxy reloaded successfully")
+					log.Infow("HAProxy reloaded successfully")
 					instance.Reset()
 				}
 			}
@@ -99,7 +99,7 @@ func monitorHAProxyReload(ctx context.Context, logger utils.Logger) {
 }
 
 // reloadHAProxy performs a graceful reload of HAProxy using SIGUSR2 signal
-func reloadHAProxy(logger utils.Logger) error {
+func reloadHAProxy(log logger.Logger) error {
 	// Get HAProxy binary path from environment or use default
 	haproxyBin := os.Getenv("HAPROXY_BIN")
 	if haproxyBin == "" {
@@ -114,11 +114,11 @@ func reloadHAProxy(logger utils.Logger) error {
 	// First, validate the configuration
 	validateCmd := exec.Command(haproxyBin, "-c", "-f", configFile)
 	if output, err := validateCmd.CombinedOutput(); err != nil {
-		logger.Errorf("HAProxy config validation failed: %s", string(output))
+		log.Errorw("HAProxy config validation failed", "output", string(output))
 		return err
 	}
 
-	logger.Debug("HAProxy configuration validated successfully")
+	log.Debugw("HAProxy configuration validated successfully")
 
 	// Get the PID of the current HAProxy master process
 	pidFile := os.Getenv("HAPROXY_PID_FILE")
@@ -128,7 +128,7 @@ func reloadHAProxy(logger utils.Logger) error {
 
 	pidData, err := os.ReadFile(pidFile)
 	if err != nil {
-		logger.Warningf("Could not read PID file %s: %v", pidFile, err)
+		log.Warnw("Could not read PID file", "pidFile", pidFile, "error", err)
 		return err
 	}
 
@@ -136,23 +136,23 @@ func reloadHAProxy(logger utils.Logger) error {
 	pidStr := string(pidData)
 	pidStr = string([]rune(pidStr)[:len(pidStr)-1])
 
-	logger.Debugf("Sending SIGUSR2 to HAProxy master process (PID: %s) for reload", pidStr)
+	log.Debugw("Sending SIGUSR2 to HAProxy master process for reload", "pid", pidStr)
 
 	// Send SIGUSR2 to HAProxy master process for graceful reload
 	// In master-worker mode, SIGUSR2 triggers a reload
 	killCmd := exec.Command("kill", "-USR2", pidStr)
 	if output, err := killCmd.CombinedOutput(); err != nil {
-		logger.Errorf("Failed to send reload signal to HAProxy: %s", string(output))
+		log.Errorw("Failed to send reload signal to HAProxy", "output", string(output))
 		return err
 	}
 
-	logger.Debug("Reload signal sent successfully to HAProxy master process")
+	log.Debugw("Reload signal sent successfully to HAProxy master process")
 	return nil
 }
 
 // Example 1: Simple Provider
 func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
-	logger := utils.GetLogger()
+	log := logger.New("http-gw", "info")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -185,7 +185,7 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 
 	// Start the gateway (backend manager only, frontend is pre-configured)
 	if err := gw.StartWithoutFrontend(ctx); err != nil {
-			logger.Error(err)
+		log.Error(err)
 		os.Exit(1)
 	}
 
@@ -193,35 +193,35 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 	apiServer := gateway.NewAPIServer(gw, 9090)
 	go func() {
 		if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
-			logger.Errorf("API server error: %v", err)
+			log.Errorw("API server error", "error", err)
 		}
 	}()
 
 	// Start HAProxy reload monitor
-	go monitorHAProxyReload(ctx, logger)
+	go monitorHAProxyReload(ctx, log)
 
-	logger.Info("Gateway is running and ready to accept configuration")
-	logger.Info("API server listening on :9090")
-	logger.Info("")
-	logger.Info("Backend Registration API:")
-	logger.Info("  POST /api/backends - Register a backend")
-	logger.Info("  GET  /api/backends - List all backends")
-	logger.Info("  DELETE /api/backends/{name} - Unregister a backend")
-	logger.Info("")
-	logger.Info("Example backend registration:")
-	logger.Info("  curl -X POST http://localhost:9090/api/backends -H 'Content-Type: application/json' -d '{\"name\":\"api-backend\",\"servers\":[{\"name\":\"server1\",\"ip\":\"192.168.1.10\",\"port\":9000}]}'")
-	logger.Info("")
-	logger.Info("Route Configuration API:")
-	logger.Info("  POST /api/routes - Add a routing rule")
-	logger.Info("  GET  /api/routes - List all routes")
-	logger.Info("Example: curl -X POST http://localhost:9090/api/routes -d '{\"host\":\"api.example.com\",\"path\":\"/api\",\"backend\":\"api-backend\"}'")
+	log.Infow("Gateway is running and ready to accept configuration")
+	log.Infow("API server listening on :9090")
+	log.Infow("")
+	log.Infow("Backend Registration API:")
+	log.Infow("  POST /api/backends - Register a backend")
+	log.Infow("  GET  /api/backends - List all backends")
+	log.Infow("  DELETE /api/backends/{name} - Unregister a backend")
+	log.Infow("")
+	log.Infow("Example backend registration:")
+	log.Infow("  curl -X POST http://localhost:9090/api/backends -H 'Content-Type: application/json' -d '{\"name\":\"api-backend\",\"servers\":[{\"name\":\"server1\",\"ip\":\"192.168.1.10\",\"port\":9000}]}'")
+	log.Infow("")
+	log.Infow("Route Configuration API:")
+	log.Infow("  POST /api/routes - Add a routing rule")
+	log.Infow("  GET  /api/routes - List all routes")
+	log.Infow("Example: curl -X POST http://localhost:9090/api/routes -d '{\"host\":\"api.example.com\",\"path\":\"/api\",\"backend\":\"api-backend\"}'")
 
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
 
-	logger.Info("Shutting down gateway...")
+	log.Infow("Shutting down gateway...")
 	apiServer.Stop()
 	cancel()
 	gw.Stop()
@@ -229,7 +229,7 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 
 // Example 2: Polling Provider
 func runPollingProviderExample(haproxyClient api.HAProxyClient) {
-	logger := utils.GetLogger()
+	log := logger.New("http-gw", "info")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -278,19 +278,19 @@ func runPollingProviderExample(haproxyClient api.HAProxyClient) {
 
 	// Start the gateway
 	if err := gw.Start(ctx); err != nil {
-			logger.Error(err)
+		log.Error(err)
 		os.Exit(1)
 	}
 
-	logger.Info("Dynamic gateway is running on port 9080")
-	logger.Info("Provider will poll for backend updates every 10 seconds")
+	log.Infow("Dynamic gateway is running on port 9080")
+	log.Infow("Provider will poll for backend updates every 10 seconds")
 
 	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
 
-	logger.Info("Shutting down...")
+	log.Infow("Shutting down...")
 	cancel()
 	gw.Stop()
 }
@@ -298,7 +298,7 @@ func runPollingProviderExample(haproxyClient api.HAProxyClient) {
 // runFrontendManagementMode runs the gateway in frontend management mode
 // with support for multiple frontends configured via YAML or flags
 func runFrontendManagementMode(haproxyClient api.HAProxyClient, osArgs utils.OSArgs) {
-	logger := utils.GetLogger()
+	log := logger.New("http-gw", "info")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -316,13 +316,13 @@ func runFrontendManagementMode(haproxyClient api.HAProxyClient, osArgs utils.OSA
 	// Load configuration
 	config, err := registry.LoadConfig()
 	if err != nil {
-		logger.Errorf("Failed to load frontend configuration: %v", err)
+		log.Errorw("Failed to load frontend configuration", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Infof("Loaded configuration with %d frontend(s)", len(config.Frontends))
+	log.Infow("Loaded configuration with frontends", "count", len(config.Frontends))
 	for _, fe := range config.Frontends {
-		logger.Infof("  - Frontend '%s' (ID: %s): %d binding(s)", fe.Name, fe.ID, len(fe.Bindings))
+		log.Infow("Frontend loaded", "name", fe.Name, "id", fe.ID, "bindings", len(fe.Bindings))
 	}
 
 	// Create FrontendManager
@@ -330,7 +330,7 @@ func runFrontendManagementMode(haproxyClient api.HAProxyClient, osArgs utils.OSA
 
 	// Start all frontends
 	if err := frontendManager.Start(ctx); err != nil {
-		logger.Errorf("Failed to start frontends: %v", err)
+		log.Errorw("Failed to start frontends", "error", err)
 		os.Exit(1)
 	}
 
@@ -339,46 +339,46 @@ func runFrontendManagementMode(haproxyClient api.HAProxyClient, osArgs utils.OSA
 	enhancedAPI := gateway.NewEnhancedAPIServer(frontendManager, apiPort)
 	go func() {
 		if err := enhancedAPI.Start(); err != nil && err != http.ErrServerClosed {
-			logger.Errorf("Enhanced API server error: %v", err)
+			log.Errorw("Enhanced API server error", "error", err)
 		}
 	}()
 
 	// Start HAProxy reload monitor
-	go monitorHAProxyReload(ctx, logger)
+	go monitorHAProxyReload(ctx, log)
 
-	logger.Info("Frontend Management Gateway is running")
-	logger.Infof("Enhanced API server listening on :%d", apiPort)
-	logger.Info("")
-	logger.Info("Frontend Management API:")
-	logger.Info("  GET    /api/frontends - List all frontends")
-	logger.Info("  GET    /api/frontends/{id} - Get frontend details")
-	logger.Info("  GET    /api/frontends/{id}/stats - Get frontend statistics")
-	logger.Info("")
-	logger.Info("Backend Management API (per frontend):")
-	logger.Info("  POST   /api/frontends/{id}/backends - Register backend to frontend")
-	logger.Info("  GET    /api/frontends/{id}/backends - List backends for frontend")
-	logger.Info("  DELETE /api/frontends/{id}/backends/{name} - Unregister backend")
-	logger.Info("")
-	logger.Info("Route Management API (per frontend):")
-	logger.Info("  POST   /api/frontends/{id}/routes - Add route to frontend")
-	logger.Info("  GET    /api/frontends/{id}/routes - List routes for frontend")
-	logger.Info("  DELETE /api/frontends/{id}/routes/{route_id} - Delete route")
-	logger.Info("")
-	logger.Info("Example usage:")
-	logger.Info("  # List frontends")
-	logger.Info("  curl http://localhost:9090/api/frontends")
-	logger.Info("")
-	logger.Info("  # Register backend to specific frontend")
-	logger.Info("  curl -X POST http://localhost:9090/api/frontends/public-api/backends \\")
-	logger.Info("    -H 'Content-Type: application/json' \\")
-	logger.Info("    -d '{\"name\":\"api-backend\",\"servers\":[{\"name\":\"srv1\",\"ip\":\"10.0.1.10\",\"port\":8080}]}'")
+	log.Infow("Frontend Management Gateway is running")
+	log.Infow("Enhanced API server listening", "port", apiPort)
+	log.Infow("")
+	log.Infow("Frontend Management API:")
+	log.Infow("  GET    /api/frontends - List all frontends")
+	log.Infow("  GET    /api/frontends/{id} - Get frontend details")
+	log.Infow("  GET    /api/frontends/{id}/stats - Get frontend statistics")
+	log.Infow("")
+	log.Infow("Backend Management API (per frontend):")
+	log.Infow("  POST   /api/frontends/{id}/backends - Register backend to frontend")
+	log.Infow("  GET    /api/frontends/{id}/backends - List backends for frontend")
+	log.Infow("  DELETE /api/frontends/{id}/backends/{name} - Unregister backend")
+	log.Infow("")
+	log.Infow("Route Management API (per frontend):")
+	log.Infow("  POST   /api/frontends/{id}/routes - Add route to frontend")
+	log.Infow("  GET    /api/frontends/{id}/routes - List routes for frontend")
+	log.Infow("  DELETE /api/frontends/{id}/routes/{route_id} - Delete route")
+	log.Infow("")
+	log.Infow("Example usage:")
+	log.Infow("  # List frontends")
+	log.Infow("  curl http://localhost:9090/api/frontends")
+	log.Infow("")
+	log.Infow("  # Register backend to specific frontend")
+	log.Infow("  curl -X POST http://localhost:9090/api/frontends/public-api/backends \\")
+	log.Infow("    -H 'Content-Type: application/json' \\")
+	log.Infow("    -d '{\"name\":\"api-backend\",\"servers\":[{\"name\":\"srv1\",\"ip\":\"10.0.1.10\",\"port\":8080}]}'")
 
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
 
-	logger.Info("Shutting down frontend management gateway...")
+	log.Infow("Shutting down frontend management gateway...")
 	enhancedAPI.Stop()
 	cancel()
 	frontendManager.Stop()

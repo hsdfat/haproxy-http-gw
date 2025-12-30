@@ -120,7 +120,7 @@ func (c *HAProxyController) Stop() {
 // updateHAProxy is the control loop syncing HAProxy configuration
 func (c *HAProxyController) updateHAProxy() {
 	var err error
-	logger.Trace("HAProxy config sync started")
+	logger.Debug("HAProxy config sync started")
 	c.prometheusMetricsManager.UnsetUnableSyncGauge()
 
 	err = c.haproxy.APIStartTransaction()
@@ -134,7 +134,7 @@ func (c *HAProxyController) updateHAProxy() {
 	}()
 	// First log here that will contain the "transactionID" field (added in APIStartTransaction)
 	// All subsequent log line will contain the "transactionID" field.
-	logger.Trace("HAProxy config sync transaction started")
+	logger.Debug("HAProxy config sync transaction started")
 
 	c.handleGlobalConfig()
 
@@ -237,7 +237,7 @@ func (c *HAProxyController) updateHAProxy() {
 	c.clean(false)
 	// If transaction succeeds thenpush backends state for any future recover.
 	logger.Error(c.haproxy.PushPreviousBackends())
-	logger.Trace("HAProxy config sync ended")
+	logger.Debug("HAProxy config sync ended")
 }
 
 // setToRready exposes readiness endpoint

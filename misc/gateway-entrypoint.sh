@@ -51,7 +51,7 @@ echo "HAProxy is ready, starting HTTP Gateway application..."
 # Start the HTTP Gateway (this will keep running in foreground)
 # Export the actual socket path so the application can use it
 export HAPROXY_RUNTIME_SOCKET="$ACTUAL_SOCKET"
-export HAPROXY_PID_FILE="/tmp/haproxy-gateway/haproxy.pidfile"
+export HAPROXY_PID_FILE="/tmp/haproxy-gateway/haproxy.pid"
 export HAPROXY_CONFIG="/etc/haproxy/haproxy.cfg"
 export HAPROXY_BIN="/usr/local/sbin/haproxy"
 

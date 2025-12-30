@@ -106,7 +106,7 @@ func (c *clientNative) runRaw(runtime runtime.Runtime, sb strings.Builder, backe
 		switch result[0:4] {
 		case "[3]:", "[2]:", "[1]:", "[0]:":
 			logger.Errorf("[RUNTIME] [BACKEND] [SOCKET] backend %s', server slots adjustment ?", backendName)
-			logger.Tracef("[RUNTIME] [BACKEND] [SOCKET] backend %s: Error: '%s', server slots adjustment ?", backendName, result)
+			logger.Debugf("[RUNTIME] [BACKEND] [SOCKET] backend %s: Error: '%s', server slots adjustment ?", backendName, result)
 			err := errors.New("runtime update failed for " + backendName)
 			pmm.UpdateRuntimeMetrics(metrics.ObjectServer, err)
 			return err
@@ -165,11 +165,11 @@ func (c *clientNative) SyncBackendSrvs(backend *store.RuntimeBackend, portUpdate
 	if backend.Name == "" {
 		return nil
 	}
-	logger.Tracef("[RUNTIME] [BACKEND] [SERVER] updating backend  %s for haproxy servers update (address and state) through socket", backend.Name)
+	logger.Debugf("[RUNTIME] [BACKEND] [SERVER] updating backend  %s for haproxy servers update (address and state) through socket", backend.Name)
 	haproxySrvs := backend.HAProxySrvs
 	addresses := backend.Endpoints.Addresses
-	logger.Tracef("[RUNTIME] [BACKEND] [SERVER] backend %s: list of servers %+v", backend.Name, haproxySrvs)
-	logger.Tracef("[RUNTIME] [BACKEND] [SERVER] backend %s: list of endpoints addresses %+v", backend.Name, addresses)
+	logger.Debugf("[RUNTIME] [BACKEND] [SERVER] backend %s: list of servers %+v", backend.Name, haproxySrvs)
+	logger.Debugf("[RUNTIME] [BACKEND] [SERVER] backend %s: list of endpoints addresses %+v", backend.Name, addresses)
 	// Disable stale entries from HAProxySrvs
 	// and provide list of Disabled Srvs
 	var disabled []*store.HAProxySrv
@@ -195,8 +195,8 @@ func (c *clientNative) SyncBackendSrvs(backend *store.RuntimeBackend, portUpdate
 		delete(addresses, newAddr)
 	}
 
-	logger.Tracef("[RUNTIME] [BACKEND] [SERVER] backend %s: list of servers after treatment  %+v", backend.Name, haproxySrvs)
-	logger.Tracef("[RUNTIME] [BACKEND] [SERVER] backend %s: list of endpoints addresses after treatment  %+v", backend.Name, addresses)
+	logger.Debugf("[RUNTIME] [BACKEND] [SERVER] backend %s: list of servers after treatment  %+v", backend.Name, haproxySrvs)
+	logger.Debugf("[RUNTIME] [BACKEND] [SERVER] backend %s: list of endpoints addresses after treatment  %+v", backend.Name, addresses)
 
 	// Dynamically updates HAProxy backend servers  with HAProxySrvs content
 	runtimeServerData := make([]RuntimeServerData, 0, len(haproxySrvs))
@@ -205,7 +205,7 @@ func (c *clientNative) SyncBackendSrvs(backend *store.RuntimeBackend, portUpdate
 			continue
 		}
 		if srv.Address == "" {
-			logger.Tracef("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s' changed status to %v", backend.Name, srv.Name, "maint")
+			logger.Debugf("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s' changed status to %v", backend.Name, srv.Name, "maint")
 			runtimeServerData = append(runtimeServerData, RuntimeServerData{
 				BackendName: backend.Name,
 				ServerName:  srv.Name,
@@ -214,7 +214,7 @@ func (c *clientNative) SyncBackendSrvs(backend *store.RuntimeBackend, portUpdate
 				State:       "maint",
 			})
 		} else {
-			logger.Tracef("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s': addr '%s' changed status to %v", backend.Name, srv.Name, srv.Address, "ready")
+			logger.Debugf("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s': addr '%s' changed status to %v", backend.Name, srv.Name, srv.Address, "ready")
 			runtimeServerData = append(runtimeServerData, RuntimeServerData{
 				BackendName: backend.Name,
 				ServerName:  srv.Name,

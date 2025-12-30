@@ -76,15 +76,15 @@ func main() {
 		os.Exit(1) //nolint:gocritic
 	}
 
-	logger.SetLevel(osArgs.LogLevel.LogLevel)
+	// logger.SetLevel(osArgs.LogLevel.LogLevel)
 	if len(osArgs.Help) > 0 && osArgs.Help[0] {
 		parser.WriteHelp(os.Stdout)
 		return
 	}
 
 	if osArgs.JobCheckCRD {
-		logger.Print(version.IngressControllerInfo)
-		logger.Print(job.IngressControllerCRDUpdater)
+		logger.Debug(version.IngressControllerInfo)
+		logger.Debug(job.IngressControllerCRDUpdater)
 		logger.Infof("HAProxy Ingress Controller CRD Updater %s %s", version.GitTag, version.GitCommit)
 		logger.Infof("Build from: %s", version.GitRepo)
 		logger.Infof("Build date: %s\n", version.GitCommitDate)
@@ -99,7 +99,7 @@ func main() {
 	}
 
 	if osArgs.CRDInputFile != "" && osArgs.CRDOutputFile != "" {
-		logger.Print(version.IngressControllerInfo)
+		logger.Debug(version.IngressControllerInfo)
 		logger.Infof("HAProxy Ingress Controller CRD Converter %s %s", version.GitTag, version.GitCommit)
 		logger.Infof("Build from: %s", version.GitRepo)
 		logger.Infof("Build date: %s\n", version.GitCommitDate)
@@ -117,12 +117,12 @@ func main() {
 		osArgs.InitialSyncPeriod = osArgs.SyncPeriod
 	}
 
-	logger.ShowFilename(false)
+	// logger.ShowFilename(false)
 	exit := logInfo(logger, osArgs)
 	if exit {
 		return
 	}
-	logger.ShowFilename(true)
+	// logger.ShowFilename(true)
 
 	annotations.DisableConfigSnippets(osArgs.DisableConfigSnippets)
 
@@ -183,10 +183,10 @@ func main() {
 	signalC := make(chan os.Signal, 1)
 	signal.Notify(signalC, os.Interrupt, syscall.SIGTERM, syscall.SIGUSR1)
 	<-signalC
-	logger.Print("Graceful shutdown requested ....")
+	logger.Debug("Graceful shutdown requested ....")
 	c.Stop()
 	close(stop)
-	logger.Print("Graceful shutdown done, exiting")
+	logger.Debug("Graceful shutdown done, exiting")
 }
 
 func logInfo(logger utils.Logger, osArgs utils.OSArgs) bool {
@@ -207,68 +207,68 @@ func logInfo(logger utils.Logger, osArgs utils.OSArgs) bool {
 		return true
 	}
 
-	logger.Print(version.IngressControllerInfo)
-	logger.Printf("HAProxy Ingress Controller %s %s", version.GitTag, version.GitCommit)
-	logger.Printf("Build from: %s", version.GitRepo)
-	logger.Printf("Git commit date: %s", version.GitCommitDate)
-	logger.Printf("ConfigMap: %s", osArgs.ConfigMap)
-	logger.Printf("Ingress class: %s", osArgs.IngressClass)
-	logger.Printf("Empty Ingress class: %t", osArgs.EmptyIngressClass)
+	logger.Debug(version.IngressControllerInfo)
+	logger.Debugf("HAProxy Ingress Controller %s %s", version.GitTag, version.GitCommit)
+	logger.Debugf("Build from: %s", version.GitRepo)
+	logger.Debugf("Git commit date: %s", version.GitCommitDate)
+	logger.Debugf("ConfigMap: %s", osArgs.ConfigMap)
+	logger.Debugf("Ingress class: %s", osArgs.IngressClass)
+	logger.Debugf("Empty Ingress class: %t", osArgs.EmptyIngressClass)
 	if osArgs.GatewayControllerName != "" {
 		// display log message only if Gateway API is used
-		logger.Printf("Gateway API controller name: %s", osArgs.GatewayControllerName)
+		logger.Debugf("Gateway API controller name: %s", osArgs.GatewayControllerName)
 	}
-	logger.Printf("Publish service: %s", osArgs.PublishService)
+	logger.Debugf("Publish service: %s", osArgs.PublishService)
 	if osArgs.DefaultBackendService.String() != "" {
-		logger.Printf("Default backend service: %s", osArgs.DefaultBackendService)
+		logger.Debugf("Default backend service: %s", osArgs.DefaultBackendService)
 	} else {
-		logger.Printf("Using local backend service on port: %d", osArgs.DefaultBackendPort)
+		logger.Debugf("Using local backend service on port: %d", osArgs.DefaultBackendPort)
 	}
-	logger.Printf("Default ssl certificate: %s", osArgs.DefaultCertificate)
+	logger.Debugf("Default ssl certificate: %s", osArgs.DefaultCertificate)
 	if !osArgs.DisableHTTP {
-		logger.Printf("Frontend HTTP listening on: %s:%d", osArgs.IPV4BindAddr, osArgs.HTTPBindPort)
+		logger.Debugf("Frontend HTTP listening on: %s:%d", osArgs.IPV4BindAddr, osArgs.HTTPBindPort)
 	}
 	if !osArgs.DisableHTTPS {
-		logger.Printf("Frontend HTTPS listening on: %s:%d", osArgs.IPV4BindAddr, osArgs.HTTPSBindPort)
+		logger.Debugf("Frontend HTTPS listening on: %s:%d", osArgs.IPV4BindAddr, osArgs.HTTPSBindPort)
 	}
 	if osArgs.DisableHTTP {
-		logger.Printf("Disabling HTTP frontend")
+		logger.Debugf("Disabling HTTP frontend")
 	}
 	if osArgs.DisableHTTPS {
-		logger.Printf("Disabling HTTPS frontend")
+		logger.Debugf("Disabling HTTPS frontend")
 	}
 	if osArgs.DisableIPV4 {
-		logger.Printf("Disabling IPv4 support")
+		logger.Debugf("Disabling IPv4 support")
 	}
 	if osArgs.DisableIPV6 {
-		logger.Printf("Disabling IPv6 support")
+		logger.Debugf("Disabling IPv6 support")
 	}
 	if osArgs.ConfigMapTCPServices.Name != "" {
-		logger.Printf("TCP Services provided in '%s'", osArgs.ConfigMapTCPServices)
+		logger.Debugf("TCP Services provided in '%s'", osArgs.ConfigMapTCPServices)
 	}
 	if osArgs.ConfigMapErrorFiles.Name != "" {
-		logger.Printf("Errorfiles provided in '%s'", osArgs.ConfigMapErrorFiles)
+		logger.Debugf("Errorfiles provided in '%s'", osArgs.ConfigMapErrorFiles)
 	}
 	if osArgs.ConfigMapPatternFiles.Name != "" {
-		logger.Printf("Pattern files provided in '%s'", osArgs.ConfigMapPatternFiles)
+		logger.Debugf("Pattern files provided in '%s'", osArgs.ConfigMapPatternFiles)
 	}
 	if osArgs.DisableConfigSnippets != "" {
-		logger.Printf("Disabling config snippets for [%s]", osArgs.DisableConfigSnippets)
+		logger.Debugf("Disabling config snippets for [%s]", osArgs.DisableConfigSnippets)
 	}
 	if osArgs.DisableDelayedWritingOnlyIfReload {
-		logger.Printf("Disabling the delayed writing of files to disk only in case of haproxy reload (write to disk even if no reload)")
+		logger.Debugf("Disabling the delayed writing of files to disk only in case of haproxy reload (write to disk even if no reload)")
 	}
 	logger.Debugf("Kubernetes Informers resync period: %s", osArgs.CacheResyncPeriod.String())
-	logger.Printf("Controller initial sync period: %s", osArgs.InitialSyncPeriod.String())
+	logger.Debugf("Controller initial sync period: %s", osArgs.InitialSyncPeriod.String())
 	if osArgs.Experimental.UseIngressMerge {
-		logger.Print("Ingress Management: merge implementation")
+		logger.Debug("Ingress Management: merge implementation")
 	} else {
-		logger.Print("Ingress Management: default implementation")
+		logger.Debug("Ingress Management: default implementation")
 	}
-	logger.Printf("Controller sync period: %s\n", osArgs.SyncPeriod.String())
+	logger.Debugf("Controller sync period: %s\n", osArgs.SyncPeriod.String())
 	hostname, err := os.Hostname()
 	logger.Error(err)
-	logger.Printf("Running on %s", hostname)
+	logger.Debugf("Running on %s", hostname)
 	return false
 }
 
