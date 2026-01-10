@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for production-grade EIR service
 
 # Stage 1: Build
-FROM golang:1.25.2 AS builder
+FROM hsdfat/ubi8-go:1.25.2 AS builder
 ENV WORKDIR=/app
 # Set working directory
 WORKDIR ${WORKDIR}
