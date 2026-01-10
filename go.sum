@@ -82,10 +82,10 @@ github.com/haproxytech/go-logger v1.1.0 h1:HgGtYaI1ApkvbQdsm7f9AzQQoxTB7w37criTf
 github.com/haproxytech/go-logger v1.1.0/go.mod h1:OekUd8HCb7ubxMplzHUPBTHNxZmddOWfOjWclZsqIeM=
 github.com/hsdfat/go-zlog v0.0.3 h1:lNZDSu5DbHMGt4QB7AwTUgSDnxAMs5tWyGVs6F7n9no=
 github.com/hsdfat/go-zlog v0.0.3/go.mod h1:fT0IzEu0cTAG/kC7YeM8BN0I+HqJOXME3nMRW2lRQKI=
-github.com/hsdfat/governance v0.0.0-20251228221731-6022b2c342dd h1:rlufaD7gbodztCpHu60UJQ4SoehuFgNPxoOvP2ZR+A8=
-github.com/hsdfat/governance v0.0.0-20251228221731-6022b2c342dd/go.mod h1:E4xq1lM9IOizvzoEBp8KSNLU4x55QdJl4W06TCySXXw=
-github.com/hsdfat/telco v0.0.5-0.20251229013106-2de83d76877a h1:ePJgC4KVFTI8hAon2T+97QCynsEyf6MgNQRhiOXAk1U=
-github.com/hsdfat/telco v0.0.5-0.20251229013106-2de83d76877a/go.mod h1:NyM9tj8SbLik9P/68F0mJ86b2fKgWuhXC8UEb2X3K7E=
+github.com/hsdfat/governance v0.0.0-20260110065044-9e088598e01a h1:BPgcCdT5IgrAb1O3qSViGuAFAifMD4QRCrdDbJThKLE=
+github.com/hsdfat/governance v0.0.0-20260110065044-9e088598e01a/go.mod h1:K6uqNVCW8pQmaKZm9mq5Mgnxhv69bfSpQxnO0qYNf74=
+github.com/hsdfat/telco v0.0.5-0.20260110064706-87be845ac618 h1:+a1i8vJYbO5QBM77BArclspengN0ao93fxsFrWXDDBo=
+github.com/hsdfat/telco v0.0.5-0.20260110064706-87be845ac618/go.mod h1:NyM9tj8SbLik9P/68F0mJ86b2fKgWuhXC8UEb2X3K7E=
 github.com/jessevdk/go-flags v1.4.0 h1:4IU2WS7AumrZ/40jfhf4QVDMsQwqA7VEHozFRrGARJA=
 github.com/jessevdk/go-flags v1.4.0/go.mod h1:4FA24M0QyGHXBuZZK/XkWh8h0e1EYbRYJSGM75WSRxI=
 github.com/josharian/intern v1.0.0 h1:vlS4z54oSdjm0bgjRigI+G1HpF+tI+9rE5LLzOg8HmY=

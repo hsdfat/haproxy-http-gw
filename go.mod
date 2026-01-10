@@ -1,6 +1,6 @@
 module github.com/haproxytech/kubernetes-ingress
 
-go 1.25.5
+go 1.25.2
 
 require (
 	github.com/GehirnInc/crypt v0.0.0-20230320061759-8cc1b52080c5
@@ -16,7 +16,7 @@ require (
 	github.com/haproxytech/client-native/v5 v5.1.16-0.20241206145631-acb903fd9ec2
 	github.com/haproxytech/client-native/v6 v6.2.4
 	github.com/hsdfat/go-zlog v0.0.3
-	github.com/hsdfat/telco v0.0.5-0.20251229013106-2de83d76877a
+	github.com/hsdfat/telco v0.0.5-0.20260110064706-87be845ac618
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/prometheus/client_golang v1.22.0
@@ -107,4 +107,4 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.7.0 // indirect
 )
 
-replace github.com/chronnie/governance => github.com/hsdfat/governance v0.0.0-20251228221731-6022b2c342dd
+replace github.com/chronnie/governance => github.com/hsdfat/governance v0.0.0-20260110065044-9e088598e01a

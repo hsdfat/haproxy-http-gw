@@ -1,9 +1,6 @@
 services:
   httpgw:
-    build:
-      context: .
-      dockerfile: cmd/eir-gateway/Dockerfile
-    image: eir-http-gateway
+    image: hsdfat/http-gw
     container_name: eir-httpgw
     ports:
       - "18200:18200"   # HTTP gateway port
