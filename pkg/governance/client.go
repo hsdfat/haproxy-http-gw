@@ -24,19 +24,17 @@ func RegisterWithGovernance(log logger.Logger, notifyMiddleware func(payload *mo
 		PodName:     podName,
 	})
 	govClient.NotifyFunc = notifyMiddleware
-	heartbeatUrl := "/heartbeat"
-	notifyUrl := "/notify"
 
+	// Use standard governance endpoints: /health for health checks and /notify for notifications
+	// Port is controlled by GOV_BACKEND_PORT environment variable (default 2345)
 	go govClient.StartHTTPServerWithClient(govclient.HTTPServerConfig{
 		Port: config.GovBackendPort,
-		HeartbeatURL: heartbeatUrl,
-		NotificationURL: notifyUrl,
 	})
 
 	// Wait a bit for server to start
 	time.Sleep(200 * time.Millisecond)
 
-	// Register diam-gw service and subscribe to configured services
+	// Register http-gw service and subscribe to configured services
 	registration := &models.ServiceRegistration{
 		ServiceName: models.ServiceNameHttpGw,
 		PodName:     podName,
@@ -48,8 +46,8 @@ func RegisterWithGovernance(log logger.Logger, notifyMiddleware func(payload *mo
 				Port:       config.ServicePort,
 			},
 		},
-		HealthCheckURL:  fmt.Sprintf("http://%s:%d%s", config.ServiceIP, config.GovBackendPort, heartbeatUrl),
-		NotificationURL: fmt.Sprintf("http://%s:%d%s", config.ServiceIP, config.GovBackendPort, notifyUrl),
+		HealthCheckURL:  fmt.Sprintf("http://%s:%d/health", config.ServiceIP, config.GovBackendPort),
+		NotificationURL: fmt.Sprintf("http://%s:%d/notify", config.ServiceIP, config.GovBackendPort),
 		Subscriptions: []models.Subscription{{
 			ServiceName: models.ServiceNameEir,
 			ProviderIDs: []string{string(models.ProviderEIRHTTP)},

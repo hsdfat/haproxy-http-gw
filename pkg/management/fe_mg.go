@@ -50,6 +50,29 @@ func (c *ConfigExample) LoadConfig() (*gateway.FrontendConfig, error) {
 					HTTPConnectionMode: "http-keep-alive",
 				},
 			},
+			{
+				ID:      EirId + "_http1",
+				Name:    "eir-http1",
+				Mode:    "http",
+				Enabled: true,
+				Bindings: []gateway.BindingDefinition{
+					{
+						Address:  "0.0.0.0",
+						Port:     env.Env.ServicePort+1,
+						Protocol: "http",
+						HTTP2:    false,
+					},
+				},
+				Routing: gateway.RoutingConfig{
+					BypassRules:    false,
+					DefaultBackend: EirId + "_be",
+				},
+				Options: gateway.FrontendOptions{
+					MaxConnections:     10000,
+					TimeoutClient:      30,
+					HTTPConnectionMode: "http-keep-alive",
+				},
+			},
 		},
 	}, nil
 }

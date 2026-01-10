@@ -219,8 +219,9 @@ func (m *Manager) tryRuntimeUpdate(existing *RuntimeBackend, newBackend *Backend
 	for i, newSrv := range newBackend.Servers {
 		slot := existing.HAProxySrvs[i]
 
-		// Check if server changed
-		if slot.Address != newSrv.IP || slot.Port != newSrv.Port {
+		// Check if server changed OR if we need to ensure it's in "ready" state
+		// Always update to ensure server state is correct (not in maint, down, etc.)
+		if slot.Address != newSrv.IP || slot.Port != newSrv.Port || slot.Address == "" {
 			logger.Debugf("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s': addr '%s:%d' changed status to ready",
 				newBackend.Name, slot.Name, newSrv.IP, newSrv.Port)
 			runtimeData = append(runtimeData, api.RuntimeServerData{
@@ -235,6 +236,18 @@ func (m *Manager) tryRuntimeUpdate(existing *RuntimeBackend, newBackend *Backend
 			slot.Address = newSrv.IP
 			slot.Port = newSrv.Port
 			slot.Modified = true
+		} else {
+			// Even if IP/Port unchanged, ensure server is in ready state
+			// This handles cases where server might be in maintenance or down state
+			logger.Debugf("[RUNTIME] [BACKEND] [SERVER] [SOCKET] backend %s: server '%s': ensuring addr '%s:%d' is in ready state",
+				newBackend.Name, slot.Name, newSrv.IP, newSrv.Port)
+			runtimeData = append(runtimeData, api.RuntimeServerData{
+				BackendName: newBackend.Name,
+				ServerName:  slot.Name,
+				IP:          newSrv.IP,
+				Port:        newSrv.Port,
+				State:       "ready",
+			})
 		}
 	}
 
@@ -334,6 +347,7 @@ func (m *Manager) configUpdate(backend *Backend) error {
 			Port:    utils.PtrInt64(int64(srv.Port)),
 			ServerParams: models.ServerParams{
 				Maintenance: "disabled",
+				Check:       "enabled", // Enable health checks so runtime state changes work
 			},
 		}
 

@@ -160,9 +160,9 @@ func (g *HTTPGateway) configureFrontend() error {
 		Address: fmt.Sprintf("%s:%d", g.config.IPv4BindAddr, g.config.HTTPPort),
 	}
 
-	// Add H2C support if HTTP/2 is enabled
+	// Add H2C (HTTP/2 Cleartext) support with HTTP/1.1 fallback if HTTP/2 is enabled
 	if g.config.EnableHTTP2 {
-		httpBind.BindParams.Proto = "h2"
+		httpBind.BindParams.Proto = "h2,http/1.1"
 	}
 
 	if err := g.haproxyClient.FrontendBindCreate(g.config.FrontendName, httpBind); err != nil {
@@ -190,7 +190,7 @@ func (g *HTTPGateway) configureFrontend() error {
 		}
 	}
 
-	// Configure IPv6 bindings if needed with H2C support
+	// Configure IPv6 bindings if needed with H2C (HTTP/2 Cleartext) support
 	httpBindV6 := models.Bind{
 		BindParams: models.BindParams{
 			Name: "http-ipv6",
@@ -201,7 +201,7 @@ func (g *HTTPGateway) configureFrontend() error {
 
 	// Add H2C support if HTTP/2 is enabled
 	if g.config.EnableHTTP2 {
-		httpBindV6.BindParams.Proto = "h2"
+		httpBindV6.BindParams.Proto = "h2,http/1.1"
 	}
 
 	if err := g.haproxyClient.FrontendBindCreate(g.config.FrontendName, httpBindV6); err != nil {

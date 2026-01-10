@@ -190,7 +190,7 @@ func runSimpleProviderExample(haproxyClient api.HAProxyClient) {
 	}
 
 	// Start API server for dynamic configuration
-	apiServer := gateway.NewAPIServer(gw, 9090)
+	apiServer := gateway.NewAPIServer(gw, 9091)
 	go func() {
 		if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
 			log.Errorw("API server error", "error", err)
