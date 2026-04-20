@@ -1,0 +1,15 @@
+# Compose override that swaps the gateway's frontend config to the one used for
+# overload integration tests. Use alongside the base docker-compose.yml:
+#
+#   docker-compose -f docker-compose.yml -f docker-compose.overload.yml up -d
+#
+# Compose replaces the `volumes` list entirely when overriding, so this file
+# re-declares the full list (matching the base) with the config file swapped
+# to frontend-config-overload.yaml.
+
+services:
+  gateway:
+    volumes:
+      - ./certs:/etc/haproxy/certs:ro
+      - ./frontend-config-overload.yaml:/etc/haproxy/frontend-config.yaml:ro
+      - haproxy-config:/tmp/haproxy-gateway

@@ -22,6 +22,7 @@ import (
 
 	"github.com/haproxytech/client-native/v6/models"
 	"github.com/haproxytech/kubernetes-ingress/pkg/haproxy/api"
+	"github.com/haproxytech/kubernetes-ingress/pkg/overload"
 )
 
 // FrontendManager manages multiple frontends based on configuration
@@ -34,10 +35,12 @@ type FrontendManager struct {
 
 // ManagedFrontend represents a managed frontend instance
 type ManagedFrontend struct {
-	Definition FrontendDefinition
-	Manager    *Manager     // Backend manager for this frontend
-	Routes     map[string]Route // Routing rules for this frontend
-	mu         sync.RWMutex
+	Definition    FrontendDefinition
+	Manager       *Manager         // Backend manager for this frontend
+	Routes        map[string]Route // Routing rules for this frontend
+	OverloadStore *overload.Store  // Nil if overload is disabled on this frontend
+	OverloadOpts  overload.Options
+	mu            sync.RWMutex
 }
 
 // Route represents a routing rule in a frontend
@@ -103,6 +106,15 @@ func (fm *FrontendManager) startFrontend(ctx context.Context, def FrontendDefini
 		return fmt.Errorf("failed to configure frontend: %w", err)
 	}
 
+	// Bootstrap per-path overload protection if enabled for this frontend.
+	if def.Options.OverloadEnabled {
+		mf.OverloadOpts = overload.Options{Period: def.Options.OverloadPeriod}
+		mf.OverloadStore = overload.NewStore()
+		if err := overload.Bootstrap(fm.haproxyClient, def.Name, mf.OverloadOpts); err != nil {
+			return fmt.Errorf("failed to bootstrap overload for frontend %s: %w", def.ID, err)
+		}
+	}
+
 	// Start backend manager
 	if err := backendMgr.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start backend manager: %w", err)
@@ -112,6 +124,82 @@ func (fm *FrontendManager) startFrontend(ctx context.Context, def FrontendDefini
 	logger.Infof("Frontend %s started successfully", def.ID)
 
 	return nil
+}
+
+// AddOverloadRule upserts a per-path overload limit on the frontend and pushes
+// the new map to HAProxy via the runtime socket (no reload).
+func (fm *FrontendManager) AddOverloadRule(frontendID string, path string, limit int64) (overload.Rule, error) {
+	mf, err := fm.overloadFrontend(frontendID)
+	if err != nil {
+		return overload.Rule{}, err
+	}
+	if path == "" {
+		return overload.Rule{}, fmt.Errorf("path is required")
+	}
+	if limit < 0 {
+		return overload.Rule{}, fmt.Errorf("limit must be >= 0")
+	}
+
+	mf.mu.Lock()
+	defer mf.mu.Unlock()
+
+	r := mf.OverloadStore.Upsert(overload.Rule{
+		FrontendName: mf.Definition.Name,
+		Path:         path,
+		Limit:        limit,
+	})
+	if err := overload.Sync(fm.haproxyClient, mf.Definition.Name, mf.OverloadOpts, mf.OverloadStore.List(mf.Definition.Name)); err != nil {
+		// Roll back the in-memory state so the store matches what HAProxy sees.
+		mf.OverloadStore.Delete(mf.Definition.Name, path)
+		return overload.Rule{}, err
+	}
+	return r, nil
+}
+
+// DeleteOverloadRule removes a per-path overload limit and syncs the map.
+func (fm *FrontendManager) DeleteOverloadRule(frontendID string, path string) error {
+	mf, err := fm.overloadFrontend(frontendID)
+	if err != nil {
+		return err
+	}
+	mf.mu.Lock()
+	defer mf.mu.Unlock()
+
+	if !mf.OverloadStore.Delete(mf.Definition.Name, path) {
+		return fmt.Errorf("overload rule for path %q not found", path)
+	}
+	return overload.Sync(fm.haproxyClient, mf.Definition.Name, mf.OverloadOpts, mf.OverloadStore.List(mf.Definition.Name))
+}
+
+// ListOverloadRules returns all overload rules for a frontend.
+func (fm *FrontendManager) ListOverloadRules(frontendID string) ([]overload.Rule, error) {
+	mf, err := fm.overloadFrontend(frontendID)
+	if err != nil {
+		return nil, err
+	}
+	return mf.OverloadStore.List(mf.Definition.Name), nil
+}
+
+// GetOverloadStats queries the stick-table via the runtime socket.
+func (fm *FrontendManager) GetOverloadStats(frontendID string) ([]overload.StatsLine, error) {
+	mf, err := fm.overloadFrontend(frontendID)
+	if err != nil {
+		return nil, err
+	}
+	return overload.Stats(fm.haproxyClient, mf.Definition.Name)
+}
+
+func (fm *FrontendManager) overloadFrontend(frontendID string) (*ManagedFrontend, error) {
+	fm.mu.RLock()
+	mf, exists := fm.frontends[frontendID]
+	fm.mu.RUnlock()
+	if !exists {
+		return nil, fmt.Errorf("frontend %s not found", frontendID)
+	}
+	if mf.OverloadStore == nil {
+		return nil, fmt.Errorf("overload protection is not enabled on frontend %s", frontendID)
+	}
+	return mf, nil
 }
 
 // configureFrontend creates HAProxy frontend configuration

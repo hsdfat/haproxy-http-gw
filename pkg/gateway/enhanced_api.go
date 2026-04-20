@@ -79,6 +79,12 @@ func NewEnhancedAPIServer(frontendMgr *FrontendManager, port int) *EnhancedAPISe
 	mux.HandleFunc("GET /api/frontends/{id}/routes", api.listRoutes)
 	mux.HandleFunc("DELETE /api/frontends/{id}/routes/{route_id}", api.deleteRoute)
 
+	// Per-path overload protection endpoints (per frontend)
+	mux.HandleFunc("POST /api/frontends/{id}/overload", api.addOverloadRule)
+	mux.HandleFunc("GET /api/frontends/{id}/overload", api.listOverloadRules)
+	mux.HandleFunc("DELETE /api/frontends/{id}/overload", api.deleteOverloadRule)
+	mux.HandleFunc("GET /api/frontends/{id}/overload/stats", api.getOverloadStats)
+
 	// Health endpoint
 	mux.HandleFunc("GET /health", api.health)
 	mux.HandleFunc("GET /api/health", api.health)

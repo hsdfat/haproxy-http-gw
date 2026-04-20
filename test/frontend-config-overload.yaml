@@ -1,0 +1,59 @@
+# Frontend configuration for integration testing of per-path overload protection.
+# frontend-api (port 8081) has overload_enabled with a short 5s period so rate
+# tests can iterate quickly. default (8080) is the control: overload disabled.
+
+frontends:
+  - id: "default"
+    name: "http-gateway"
+    enabled: true
+    mode: "http"
+    bindings:
+      - address: "0.0.0.0"
+        port: 8080
+        protocol: "http"
+        http2: true
+    routing:
+      bypass_rules: true
+      default_backend: "api-backend"
+    options:
+      max_connections: 10000
+      timeout_client: "30s"
+      http_connection_mode: "http-keep-alive"
+      # overload intentionally disabled on default frontend
+
+  - id: "frontend-api"
+    name: "api-frontend"
+    enabled: true
+    mode: "http"
+    bindings:
+      - address: "0.0.0.0"
+        port: 8081
+        protocol: "http"
+        http2: true
+    routing:
+      bypass_rules: true
+      default_backend: "api-v2-backend"
+    options:
+      max_connections: 5000
+      timeout_client: "30s"
+      http_connection_mode: "http-keep-alive"
+      # Enable per-path overload protection on this frontend.
+      overload_enabled: true
+      overload_period: "5s"
+
+  - id: "frontend-web"
+    name: "web-frontend"
+    enabled: true
+    mode: "http"
+    bindings:
+      - address: "0.0.0.0"
+        port: 8082
+        protocol: "http"
+        http2: true
+    routing:
+      bypass_rules: true
+      default_backend: "web-v2-backend"
+    options:
+      max_connections: 5000
+      timeout_client: "30s"
+      http_connection_mode: "http-keep-alive"

@@ -58,6 +58,13 @@ type FrontendOptions struct {
 	MaxConnections     int           `yaml:"max_connections" json:"max_connections"`           // Maximum concurrent connections
 	TimeoutClient      time.Duration `yaml:"timeout_client" json:"timeout_client"`             // Client timeout
 	HTTPConnectionMode string        `yaml:"http_connection_mode" json:"http_connection_mode"` // HTTP connection mode
+
+	// Per-path overload protection (global-per-path rate limit driven by a map file).
+	// When enabled, Bootstrap installs a stick-table, http-request rules and an empty
+	// map file on this frontend at startup. Rules are then managed at runtime via
+	// /api/frontends/{id}/overload.
+	OverloadEnabled bool   `yaml:"overload_enabled" json:"overload_enabled"`
+	OverloadPeriod  string `yaml:"overload_period" json:"overload_period"` // HAProxy time string, default "10s"
 }
 
 // Validate validates the entire frontend configuration
