@@ -310,6 +310,8 @@ func Sync(client api.HAProxyClient, frontendName string, opts Options, rules []R
 		return fmt.Errorf("write map file: %w", err)
 	}
 
+	time.Sleep(100 * time.Millisecond)
+
 	// 2) Push to the runtime socket so the change is live without a reload.
 	//    SetMapContent wants chunks; one chunk is fine for our expected sizes.
 	payload := []string{strings.Join(lines, "\n")}
