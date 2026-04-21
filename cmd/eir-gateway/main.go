@@ -23,10 +23,15 @@ func main() {
 	runtimeSocketPath := env.Env.RuntimeSocket
 	log.Info("Runtime Socket Path: ", runtimeSocketPath)
 
+	mapsDir := env.Env.HaproxyMapsDir
+	if mapsDir == "" {
+		mapsDir = "/etc/haproxy/maps"
+	}
 	haproxyClient, err := api.New(env.Env.TransactionDir,
 		env.Env.ConfigFile,
 		env.Env.HaproxyBinary,
 		runtimeSocketPath,
+		mapsDir,
 	)
 	if err != nil {
 		log.Fatal("Failed to create HAProxy client: ", err)

@@ -13,6 +13,7 @@ type EnvConfigs struct {
 	ConfigFile       string `mapstructure:"HAPROXY_CONFIG_FILE"`
 	HaproxyBinary    string `mapstructure:"HAPROXY_BINARY"`
 	HaproxyPIDFile   string `mapstructure:"HAPROXY_PID_FILE"`
+	HaproxyMapsDir   string `mapstructure:"HAPROXY_MAPS_DIR"`
 	ConfigAddr       string `mapstructure:"CONFIG_ADDR"`
 	TargetGov        string `mapstructure:"TARGET_GOV"`
 	GovBackendPort   int    `mapstructure:"GOV_BACKEND_PORT"`
@@ -29,6 +30,7 @@ func (e *EnvConfigs) DefaultValues() {
 	e.ConfigFile = "/etc/haproxy/haproxy.cfg"
 	e.HaproxyBinary = "/usr/local/sbin/haproxy"
 	e.HaproxyPIDFile = "/tmp/haproxy-gateway/haproxy.pid"
+	e.HaproxyMapsDir = "/etc/haproxy/maps"
 	e.TargetGov = "127.0.0.1:36610"
 	e.Governance = true
 	e.GovBackendPort = 2345

@@ -53,12 +53,20 @@ func main() {
 	}
 	log.Infow("Using HAProxy runtime socket", "socket", runtimeSocket)
 
+	// Resolve HAProxy maps directory (used by client-native to translate
+	// runtime map basenames into full paths; matches overload.DefaultMapsDir).
+	mapsDir := os.Getenv("HAPROXY_MAPS_DIR")
+	if mapsDir == "" {
+		mapsDir = "/etc/haproxy/maps"
+	}
+
 	// Initialize HAProxy API client
 	haproxyClient, err := api.New(
 		"/tmp/haproxy-gateway",          // transaction dir
 		"/etc/haproxy/haproxy.cfg",      // config file
 		"/usr/local/sbin/haproxy",       // haproxy binary
 		runtimeSocket,                    // runtime socket
+		mapsDir,                          // maps dir
 	)
 	if err != nil {
 		log.Error(err)

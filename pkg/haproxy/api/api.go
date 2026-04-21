@@ -192,10 +192,17 @@ type clientNative struct {
 	configFile                          string
 }
 
-func New(transactionDir, configFile, programPath, runtimeSocket string) (client HAProxyClient, err error) { //nolint:ireturn
+func New(transactionDir, configFile, programPath, runtimeSocket, mapsDir string) (client HAProxyClient, err error) { //nolint:ireturn
 	var runtimeClient runtime.Runtime
 	if runtimeSocket != "" {
-		runtimeClient, err = runtime.New(context.Background(), runtimeoptions.Socket(runtimeSocket), runtimeoptions.DoNotCheckRuntimeOnInit)
+		opts := []runtimeoptions.RuntimeOption{
+			runtimeoptions.Socket(runtimeSocket),
+			runtimeoptions.DoNotCheckRuntimeOnInit,
+		}
+		if mapsDir != "" {
+			opts = append(opts, runtimeoptions.MapsDir(mapsDir))
+		}
+		runtimeClient, err = runtime.New(context.Background(), opts...)
 	} else {
 		runtimeClient, err = runtime.New(context.Background())
 	}
