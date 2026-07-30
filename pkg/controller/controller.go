@@ -119,6 +119,17 @@ func (c *HAProxyController) Stop() {
 
 // updateHAProxy is the control loop syncing HAProxy configuration
 func (c *HAProxyController) updateHAProxy() {
+	for c.updateHAProxyOnce() {
+	}
+}
+
+// updateHAProxyOnce runs one sync round and reports whether the round must be
+// replayed (the disable-config-snippets recovery path). The replay has to
+// happen after this function returns: its deferred APIDisposeTransaction is
+// what releases the client's transaction lifecycle, so recursing from inside
+// the function — as this code used to — re-enters APIStartTransaction while
+// the same goroutine still owns the transaction and deadlocks.
+func (c *HAProxyController) updateHAProxyOnce() (rerun bool) {
 	var err error
 	logger.Trace("HAProxy config sync started")
 	c.prometheusMetricsManager.UnsetUnableSyncGauge()
@@ -126,7 +137,7 @@ func (c *HAProxyController) updateHAProxy() {
 	err = c.haproxy.APIStartTransaction()
 	if err != nil {
 		logger.Error(err)
-		return
+		return false
 	}
 	defer func() {
 		c.haproxy.APIDisposeTransaction()
@@ -181,20 +192,19 @@ func (c *HAProxyController) updateHAProxy() {
 		c.prometheusMetricsManager.SetUnableSyncGauge()
 		logger.Error("unable to Sync HAProxy configuration !!")
 		logger.Error(err)
-		rerun, errCfgSnippet := annotations.CheckBackendConfigSnippetError(err, c.haproxy.Env.CfgDir)
+		retry, errCfgSnippet := annotations.CheckBackendConfigSnippetError(err, c.haproxy.Env.CfgDir)
 		logger.Error(errCfgSnippet)
 		c.clean(true)
-		if rerun {
+		if retry {
 			logger.Debug("disabling some config snippets because of errors")
 			// We need to replay all these resources.
 			c.store.SecretsProcessed = map[string]struct{}{}
 			c.store.BackendsProcessed = map[string]struct{}{}
-			c.updateHAProxy()
-			return
+			return true
 		}
 		// If any error not from config snippet then pop the previous state of backends
 		logger.Error(c.haproxy.PopPreviousBackends())
-		return
+		return false
 	}
 
 	if instance.NeedReload() {
@@ -212,16 +222,15 @@ func (c *HAProxyController) updateHAProxy() {
 			}
 
 			c.prometheusMetricsManager.SetUnableSyncGauge()
-			rerun, errCfgSnippet := annotations.CheckBackendConfigSnippetErrorOnReload(errors.New(msg), c.haproxy.Env.CfgDir)
+			retry, errCfgSnippet := annotations.CheckBackendConfigSnippetErrorOnReload(errors.New(msg), c.haproxy.Env.CfgDir)
 			logger.Error(errCfgSnippet)
 			c.clean(true)
-			if rerun {
+			if retry {
 				logger.Debug("disabling some config snippets because of errors")
 				// We need to replay all these resources.
 				c.store.SecretsProcessed = map[string]struct{}{}
 				c.store.BackendsProcessed = map[string]struct{}{}
-				c.updateHAProxy()
-				return
+				return true
 			}
 			// If any error not from config snippet then pop the previous state of backends
 			logger.Error(c.haproxy.PopPreviousBackends())
@@ -238,6 +247,7 @@ func (c *HAProxyController) updateHAProxy() {
 	// If transaction succeeds thenpush backends state for any future recover.
 	logger.Error(c.haproxy.PushPreviousBackends())
 	logger.Trace("HAProxy config sync ended")
+	return false
 }
 
 // setToRready exposes readiness endpoint

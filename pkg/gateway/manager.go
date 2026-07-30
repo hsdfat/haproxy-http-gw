@@ -112,8 +112,13 @@ func (m *Manager) Stop() error {
 	logger.Info("Stopping Gateway Manager")
 	close(m.stopChan)
 
-	if err := m.provider.Stop(); err != nil {
-		logger.Errorf("Error stopping provider: %v", err)
+	// The provider is optional (Start already treats nil as "no provider");
+	// without this guard every graceful shutdown of a provider-less Manager
+	// panicked here.
+	if m.provider != nil {
+		if err := m.provider.Stop(); err != nil {
+			logger.Errorf("Error stopping provider: %v", err)
+		}
 	}
 
 	m.wg.Wait()
@@ -143,22 +148,43 @@ func (m *Manager) processEvents(ctx context.Context) {
 
 // handleBackendEvent processes a single backend event
 func (m *Manager) handleBackendEvent(event BackendEvent) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	logger.Infof("Handling backend event: %s for backend %s", event.Type, event.Backend.Name)
 
+	// Map updates hold m.mu on their own; the HAProxy sync/delete runs after it
+	// is released. syncBackendToHAProxy takes m.mu itself (calling it with the
+	// write lock held self-deadlocks — RegisterBackend already uses this shape),
+	// and clientBackendDelete takes the client's transaction lock, which
+	// configUpdate holds while acquiring m.mu — so taking it under m.mu would
+	// invert that order and deadlock.
 	switch event.Type {
 	case BackendEventAdd, BackendEventUpdate:
 		backend := event.Backend
+		m.mu.Lock()
 		m.backends[backend.Name] = &backend
+		m.mu.Unlock()
 		if err := m.syncBackendToHAProxy(&backend); err != nil {
 			logger.Errorf("Error syncing backend %s: %v", backend.Name, err)
 		}
 	case BackendEventDelete:
+		m.mu.Lock()
 		delete(m.backends, event.Backend.Name)
-		m.haproxyClient.BackendDelete(event.Backend.Name)
+		m.mu.Unlock()
+		m.clientBackendDelete(event.Backend.Name)
 	}
+}
+
+// clientBackendDelete removes a backend from the shared client's staging map.
+// BackendDelete mutates state that final commits iterate under the client's
+// transaction lock, so the deletion has to hold that lock too. The lock is
+// taken here rather than inside BackendDelete itself because handler code
+// calls BackendDelete mid-transaction, when the lock is already held. Callers
+// must not hold m.mu (see handleBackendEvent).
+func (m *Manager) clientBackendDelete(name string) {
+	if locker, ok := m.haproxyClient.(api.TransactionLocker); ok {
+		locker.TxLock()
+		defer locker.TxUnlock()
+	}
+	m.haproxyClient.BackendDelete(name)
 }
 
 // syncBackendToHAProxy updates HAProxy configuration for a backend
@@ -463,16 +489,15 @@ func (m *Manager) RegisterBackend(backend Backend) error {
 // UnregisterBackend removes a backend and deletes it from HAProxy
 func (m *Manager) UnregisterBackend(name string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if _, exists := m.backends[name]; !exists {
+		m.mu.Unlock()
 		return fmt.Errorf("backend %s not found", name)
 	}
-
 	delete(m.backends, name)
+	m.mu.Unlock()
 
-	// Delete from HAProxy
-	m.haproxyClient.BackendDelete(name)
+	// Delete from HAProxy. Outside m.mu — see clientBackendDelete.
+	m.clientBackendDelete(name)
 
 	logger.Infof("Backend %s unregistered successfully", name)
 	return nil

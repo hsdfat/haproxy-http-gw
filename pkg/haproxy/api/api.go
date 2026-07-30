@@ -386,6 +386,25 @@ func (c *clientNative) APIFinalCommitTransaction() error {
 	return err
 }
 
+// TransactionLocker is the transaction-lifecycle lock of a client, exposed so
+// code that must observe a quiescent client — no transaction mid-flight — can
+// hold it without opening a transaction. The reload monitor is the intended
+// user: checking the reload flag and reloading the on-disk config while a
+// final commit is between flag-set and file-write would reload the old file
+// and then clear the flag, silently dropping the newer configuration.
+// Callers must not start a transaction while holding the lock.
+type TransactionLocker interface {
+	TxLock()
+	TxUnlock()
+}
+
+// TxLock acquires the transaction-lifecycle lock without opening a
+// transaction. See TransactionLocker.
+func (c *clientNative) TxLock() { c.txMu.Lock() }
+
+// TxUnlock releases the lock taken by TxLock.
+func (c *clientNative) TxUnlock() { c.txMu.Unlock() }
+
 // APIDisposeTransaction ends the transaction opened by APIStartTransaction and
 // releases the client. It is a no-op when there is no transaction of ours to
 // dispose, so a caller that disposes after a failed start, or disposes twice,

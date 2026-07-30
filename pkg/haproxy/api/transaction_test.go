@@ -95,9 +95,13 @@ func TestCommitWithoutTransactionKeepsConfigFile(t *testing.T) {
 	// differ, which is what carries the commit past the no-op shortcut and into
 	// client-native's CommitTransaction -- and with an empty ID that deletes the
 	// live config file on its success path.
+	// Dispose is deferred immediately, as production callers must; the explicit
+	// dispose below then plays the racing goroutine, and the deferred one is the
+	// no-op double dispose.
 	if err := client.APIStartTransaction(); err != nil {
 		t.Fatalf("start transaction: %v", err)
 	}
+	defer client.APIDisposeTransaction()
 	client.BackendCreatePermanently(models.Backend{
 		BackendBase: models.BackendBase{Name: "staged_be", Mode: "http"},
 	})
@@ -130,6 +134,7 @@ func TestRegisterAndCommitTransaction(t *testing.T) {
 	if err := client.APIStartTransaction(); err != nil {
 		t.Fatalf("start transaction: %v", err)
 	}
+	defer client.APIDisposeTransaction()
 
 	client.BackendCreatePermanently(models.Backend{
 		BackendBase: models.BackendBase{Name: "udm_be", Mode: "http"},
