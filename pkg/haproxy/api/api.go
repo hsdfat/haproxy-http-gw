@@ -7,6 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	goruntime "runtime"
+	"strconv"
+	"strings"
 	"sync"
 
 	clientnative "github.com/haproxytech/client-native/v6"
@@ -35,6 +38,12 @@ const BufferSize = 16000
 // process unable to reload. An empty ID is only ever legitimate for master
 // parser reads, never for a commit.
 var ErrNoActiveTransaction = errors.New("no active haproxy transaction: refusing to commit with an empty transaction id")
+
+// ErrNotTransactionOwner is returned when a commit is attempted by a goroutine
+// that did not start the active transaction. Without this check a stray commit
+// would target whatever transaction another goroutine happens to have in
+// flight, committing or deleting it out from under its owner.
+var ErrNotTransactionOwner = errors.New("haproxy transaction is owned by another goroutine: refusing to commit it")
 
 var logger = utils.GetLogger()
 
@@ -209,12 +218,32 @@ type clientNative struct {
 	// released by APIDisposeTransaction.
 	txMu sync.Mutex
 
-	// txStateMu guards txOwned, which records whether txMu is currently held for
-	// a started transaction. It keeps APIDisposeTransaction safe to call when no
-	// transaction was started, or a second time for the same one, instead of
-	// panicking on an unlocked mutex or releasing a lock someone else holds.
+	// txStateMu guards txOwner, the ID of the goroutine whose started
+	// transaction currently holds txMu (0 = none). Tracking the owner — not just
+	// a boolean — keeps APIDisposeTransaction safe against every stray-dispose
+	// shape: disposing with no transaction started, disposing twice, and the
+	// nastier interleaving where goroutine A disposes, goroutine B starts, and
+	// A's *deferred* dispose then fires — with a plain boolean that deferred
+	// dispose would clear B's transaction ID and unlock B's mutex mid-commit.
+	// Consequence: a transaction must be disposed by the goroutine that
+	// started it, which every caller (defer in the starting function) satisfies.
 	txStateMu sync.Mutex
-	txOwned   bool
+	txOwner   uint64
+}
+
+// goroutineID returns the current goroutine's ID by parsing the stack header.
+// There is no public API for this; the parse is the standard trick and costs
+// far less than the file I/O and exec a transaction already performs.
+func goroutineID() uint64 {
+	var buf [64]byte
+	n := goruntime.Stack(buf[:], false)
+	s := strings.TrimPrefix(string(buf[:n]), "goroutine ")
+	if i := strings.IndexByte(s, ' '); i > 0 {
+		if id, err := strconv.ParseUint(s[:i], 10, 64); err == nil {
+			return id
+		}
+	}
+	return 0
 }
 
 func New(transactionDir, configFile, programPath, runtimeSocket string) (client HAProxyClient, err error) { //nolint:ireturn
@@ -257,10 +286,11 @@ func New(transactionDir, configFile, programPath, runtimeSocket string) (client 
 
 // APIStartTransaction opens a configuration transaction and takes ownership of
 // the client until APIDisposeTransaction releases it. Callers must dispose every
-// transaction they successfully start, conventionally with a defer.
+// transaction they successfully start, conventionally with a defer, and from
+// the same goroutine that started it.
 func (c *clientNative) APIStartTransaction() error {
 	c.txMu.Lock()
-	c.setTxOwned(true)
+	c.setTxOwner(goroutineID())
 
 	if err := c.startTransaction(); err != nil {
 		// A failed start owns nothing: drop any half-set ID so a later stray
@@ -268,7 +298,7 @@ func (c *clientNative) APIStartTransaction() error {
 		// orphaned transaction, and release the lock, because callers return the
 		// error without disposing.
 		c.activeTransaction = ""
-		c.setTxOwned(false)
+		c.setTxOwner(0)
 		c.txMu.Unlock()
 		return err
 	}
@@ -319,6 +349,9 @@ func (c *clientNative) APICommitTransaction() error {
 	if c.activeTransaction == "" {
 		return ErrNoActiveTransaction
 	}
+	if !c.isTxOwner() {
+		return ErrNotTransactionOwner
+	}
 
 	configuration, err := c.nativeAPI.Configuration()
 	if err != nil {
@@ -341,11 +374,15 @@ func (c *clientNative) APICommitTransaction() error {
 }
 
 func (c *clientNative) APIFinalCommitTransaction() error {
-	// The guard has to come before BackendDeleteAllUnnecessary and the backend
+	// The guards have to come before BackendDeleteAllUnnecessary and the backend
 	// processing loop below: with an empty transaction ID those would mutate the
-	// live configuration through the master parser instead of a transaction.
+	// live configuration through the master parser instead of a transaction, and
+	// a non-owner would process them into another goroutine's transaction.
 	if c.activeTransaction == "" {
 		return ErrNoActiveTransaction
+	}
+	if !c.isTxOwner() {
+		return ErrNotTransactionOwner
 	}
 
 	configuration, err := c.nativeAPI.Configuration()
@@ -406,33 +443,47 @@ func (c *clientNative) TxLock() { c.txMu.Lock() }
 func (c *clientNative) TxUnlock() { c.txMu.Unlock() }
 
 // APIDisposeTransaction ends the transaction opened by APIStartTransaction and
-// releases the client. It is a no-op when there is no transaction of ours to
-// dispose, so a caller that disposes after a failed start, or disposes twice,
-// does not release a lock another goroutine legitimately holds.
+// releases the client. It is a no-op unless the calling goroutine owns the
+// active transaction, so a dispose after a failed start, a double dispose, or
+// a deferred dispose firing after another goroutine has since started its own
+// transaction never clears state or releases a lock it does not own. The
+// logger fields are likewise only reset when a transaction is actually
+// disposed — an unconditional reset would strip the transactionID field from
+// a transaction in flight on another goroutine.
 func (c *clientNative) APIDisposeTransaction() {
-	logger.ResetFields()
-
 	if !c.takeTxOwnership() {
 		return
 	}
+	logger.ResetFields()
 	c.activeTransaction = ""
 	c.txMu.Unlock()
 }
 
-func (c *clientNative) setTxOwned(owned bool) {
+func (c *clientNative) setTxOwner(gid uint64) {
 	c.txStateMu.Lock()
-	c.txOwned = owned
+	c.txOwner = gid
 	c.txStateMu.Unlock()
 }
 
-// takeTxOwnership clears the ownership flag and reports whether this caller is
-// the one responsible for releasing txMu.
-func (c *clientNative) takeTxOwnership() bool {
+// isTxOwner reports whether the calling goroutine owns the active transaction.
+func (c *clientNative) isTxOwner() bool {
+	gid := goroutineID()
 	c.txStateMu.Lock()
 	defer c.txStateMu.Unlock()
-	owned := c.txOwned
-	c.txOwned = false
-	return owned
+	return c.txOwner != 0 && c.txOwner == gid
+}
+
+// takeTxOwnership clears ownership and reports whether the calling goroutine
+// was the owner — the one responsible for releasing txMu.
+func (c *clientNative) takeTxOwnership() bool {
+	gid := goroutineID()
+	c.txStateMu.Lock()
+	defer c.txStateMu.Unlock()
+	if c.txOwner == 0 || c.txOwner != gid {
+		return false
+	}
+	c.txOwner = 0
+	return true
 }
 
 func (c *clientNative) SetAuxCfgFile(auxCfgFile string) {

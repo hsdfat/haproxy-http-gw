@@ -167,6 +167,55 @@ func TestRegisterAndCommitTransaction(t *testing.T) {
 	client.APIDisposeTransaction()
 }
 
+// TestStrayDisposeDoesNotStealTransaction pins the deferred-dispose
+// interleaving: goroutine A starts and disposes a transaction, goroutine B
+// starts its own, and then A's deferred dispose fires. With ownership tracked
+// as a plain boolean that stray dispose cleared B's transaction ID and
+// unlocked B's mutex mid-flight; with per-goroutine ownership it must be a
+// no-op, and B's commit must still succeed. A non-owner commit attempt must be
+// refused rather than committing B's transaction.
+func TestStrayDisposeDoesNotStealTransaction(t *testing.T) {
+	client, _ := newTestClient(t)
+
+	// Goroutine A: start and dispose, leaving a "deferred" dispose to fire late.
+	if err := client.APIStartTransaction(); err != nil {
+		t.Fatalf("A: start transaction: %v", err)
+	}
+	client.APIDisposeTransaction()
+
+	bStarted := make(chan struct{})
+	strayDone := make(chan struct{})
+	bResult := make(chan error, 1)
+
+	go func() {
+		// Goroutine B: own transaction with staged work.
+		if err := client.APIStartTransaction(); err != nil {
+			bResult <- fmt.Errorf("B: start transaction: %w", err)
+			return
+		}
+		defer client.APIDisposeTransaction()
+		client.BackendCreatePermanently(models.Backend{
+			BackendBase: models.BackendBase{Name: "b_be", Mode: "http"},
+		})
+		close(bStarted)
+		<-strayDone
+		bResult <- client.APIFinalCommitTransaction()
+	}()
+
+	<-bStarted
+	// A's deferred dispose fires while B's transaction is active: must be a
+	// no-op. A commit from this goroutine must be refused — it is not the owner.
+	client.APIDisposeTransaction()
+	if err := client.APICommitTransaction(); !errors.Is(err, ErrNotTransactionOwner) {
+		t.Errorf("non-owner commit: err = %v, want ErrNotTransactionOwner", err)
+	}
+	close(strayDone)
+
+	if err := <-bResult; err != nil {
+		t.Fatalf("B's commit must survive the stray dispose: %v", err)
+	}
+}
+
 // TestConcurrentTransactions runs the startup storm that bricked the pod: many
 // goroutines starting, staging and committing transactions on one shared
 // client. Any interleaving used to erase another goroutine's transaction ID,

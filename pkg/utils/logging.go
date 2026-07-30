@@ -92,6 +92,11 @@ type Logger interface { //nolint:interfacebloat
 }
 
 type logger struct {
+	// fieldsMu guards fields: transaction goroutines write it (WithField on
+	// start, ResetFields on dispose) while every logged line from any goroutine
+	// iterates it in fieldsAsString — an unguarded concurrent map iterate/write
+	// is a fatal runtime error, not a recoverable race.
+	fieldsMu sync.Mutex
 	fields   map[string]interface{}
 	Level    LogLevel
 	FileName bool
@@ -142,14 +147,20 @@ func (l *logger) ShowFilename(show bool) {
 }
 
 func (l *logger) WithField(key string, value interface{}) {
+	l.fieldsMu.Lock()
+	defer l.fieldsMu.Unlock()
 	l.fields[key] = value
 }
 
 func (l *logger) ResetFields() {
+	l.fieldsMu.Lock()
+	defer l.fieldsMu.Unlock()
 	clear(l.fields)
 }
 
 func (l *logger) fieldsAsString() string {
+	l.fieldsMu.Lock()
+	defer l.fieldsMu.Unlock()
 	var fields strings.Builder
 	if len(l.fields) > 0 {
 		fields.WriteString("[")

@@ -116,10 +116,14 @@ func (c *clientNative) BackendRuleDeleteAll(backend string) {
 		return
 	}
 
-	// Currently we are only using HTTPRequest rules on backend
-	err = configuration.DeleteHTTPRequestRule(0, string(parser.Backends), backend, c.activeTransaction, 0)
-	for err != nil {
-		logger.Error(err)
+	// Currently we are only using HTTPRequest rules on backend.
+	// Delete rule 0 until none is left, the same shape as FrontendRuleDeleteAll.
+	// This used to log the first error in a loop that never reassigned err,
+	// spinning forever inside whatever transaction the caller held.
+	for {
+		if err := configuration.DeleteHTTPRequestRule(0, string(parser.Backends), backend, c.activeTransaction, 0); err != nil {
+			break
+		}
 	}
 }
 

@@ -192,10 +192,14 @@ func (m *Manager) clientBackendDelete(name string) {
 func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 	logger.Debugf("Syncing backend %s to HAProxy", backend.Name)
 
-	m.mu.RLock()
+	// The whole runtime-update attempt runs under m.mu: tryRuntimeUpdate reads
+	// and mutates the shared per-slot state (Address/Port/Modified), which used
+	// to happen with no lock at all after the entry was fetched under RLock. The
+	// lock is released before configUpdate — that path acquires m.mu while
+	// holding the client's transaction lock, so entering it with m.mu held
+	// would invert the order.
+	m.mu.Lock()
 	existing, exists := m.runtimeBackends[backend.Name]
-	m.mu.RUnlock()
-
 	if exists {
 		// Try runtime update first (no reload)
 		logger.Tracef("[RUNTIME] Attempting runtime update for backend %s", backend.Name)
@@ -203,7 +207,6 @@ func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 			logger.Infof("[RUNTIME] Successfully updated backend %s via runtime socket (no reload)", backend.Name)
 
 			// Update in-memory state
-			m.mu.Lock()
 			existing.Servers = backend.Servers
 			m.mu.Unlock()
 			return nil
@@ -212,6 +215,7 @@ func (m *Manager) syncBackendToHAProxy(backend *Backend) error {
 			logger.Warningf("[RUNTIME] Runtime update failed for %s, falling back to config reload: %v", backend.Name, err)
 		}
 	}
+	m.mu.Unlock()
 
 	// Config-based update (with reload)
 	return m.configUpdate(backend)
@@ -428,12 +432,14 @@ func (m *Manager) periodicSync(ctx context.Context) {
 
 // reconcile ensures HAProxy state matches the desired state
 func (m *Manager) reconcile() {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	logger.Debug("Running periodic reconciliation")
 
-	// Skip reconciliation if no provider is configured
+	// Skip reconciliation if no provider is configured. The provider field is
+	// immutable after construction, so no lock is needed to read it — and no
+	// lock may be held around the loop below: syncBackendToHAProxy takes m.mu
+	// itself (holding it here self-deadlocked), and configUpdate acquires m.mu
+	// while holding the client's transaction lock, so entering it with m.mu
+	// held inverts that order.
 	if m.provider == nil {
 		logger.Debug("No provider configured, skipping reconciliation")
 		return
@@ -449,7 +455,9 @@ func (m *Manager) reconcile() {
 	// Update local state and sync
 	for _, backend := range backends {
 		b := backend
+		m.mu.Lock()
 		m.backends[backend.Name] = &b
+		m.mu.Unlock()
 		if err := m.syncBackendToHAProxy(&b); err != nil {
 			logger.Errorf("Reconciliation error for backend %s: %v", backend.Name, err)
 		}
