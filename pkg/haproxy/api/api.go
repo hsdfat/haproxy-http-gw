@@ -6,6 +6,7 @@ import (
 	"crypto/md5" // G501: Blocklisted import crypto/md5: weak cryptographic primitive
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 
 	clientnative "github.com/haproxytech/client-native/v6"
 	"github.com/haproxytech/client-native/v6/config-parser/types"
@@ -24,6 +25,15 @@ import (
 // BufferSize is the default value of HAproxy tune.bufsize. Not recommended to change it
 // Map payload or socket data cannot be bigger than tune.bufsize
 const BufferSize = 16000
+
+// ErrNoActiveTransaction is returned when a commit is attempted with no active
+// transaction. client-native resolves an empty transaction ID to the live
+// configuration file (GetTransactionFile("") -> ConfigurationFile), and the
+// success path of its commit deletes the transaction file it just committed --
+// so committing with an empty ID deletes the live haproxy.cfg and leaves the
+// process unable to reload. An empty ID is only ever legitimate for master
+// parser reads, never for a commit.
+var ErrNoActiveTransaction = errors.New("no active haproxy transaction: refusing to commit with an empty transaction id")
 
 var logger = utils.GetLogger()
 
@@ -267,6 +277,10 @@ func (c *clientNative) computeConfigurationHash(configuration configuration.Conf
 }
 
 func (c *clientNative) APICommitTransaction() error {
+	if c.activeTransaction == "" {
+		return ErrNoActiveTransaction
+	}
+
 	configuration, err := c.nativeAPI.Configuration()
 	if err != nil {
 		return err
@@ -288,6 +302,13 @@ func (c *clientNative) APICommitTransaction() error {
 }
 
 func (c *clientNative) APIFinalCommitTransaction() error {
+	// The guard has to come before BackendDeleteAllUnnecessary and the backend
+	// processing loop below: with an empty transaction ID those would mutate the
+	// live configuration through the master parser instead of a transaction.
+	if c.activeTransaction == "" {
+		return ErrNoActiveTransaction
+	}
+
 	configuration, err := c.nativeAPI.Configuration()
 	if err != nil {
 		return err
