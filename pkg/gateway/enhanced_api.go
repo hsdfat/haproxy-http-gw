@@ -27,7 +27,13 @@ import (
 type EnhancedAPIServer struct {
 	frontendManager *FrontendManager
 	server          *http.Server
-	mu              sync.RWMutex
+
+	// mu serializes the handlers that mutate gateway state against each other and
+	// against the handlers that report it. net/http serves every request on its
+	// own goroutine, so without this two concurrent registrations of the same
+	// backend can apply to HAProxy in one order and to the Manager's in-memory
+	// map in the other.
+	mu sync.RWMutex
 }
 
 // RouteRequest represents a route addition request
@@ -105,6 +111,9 @@ func (a *EnhancedAPIServer) Stop() error {
 
 // listFrontends handles GET /api/frontends
 func (a *EnhancedAPIServer) listFrontends(w http.ResponseWriter, r *http.Request) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	frontends := a.frontendManager.ListFrontends()
 
 	response := make([]FrontendResponse, 0, len(frontends))
@@ -118,7 +127,7 @@ func (a *EnhancedAPIServer) listFrontends(w http.ResponseWriter, r *http.Request
 			Bindings:      mf.Definition.Bindings,
 			Routing:       mf.Definition.Routing,
 			BackendsCount: len(backends),
-			RoutesCount:   len(mf.Routes),
+			RoutesCount:   mf.RoutesCount(),
 		})
 	}
 
@@ -138,6 +147,9 @@ func (a *EnhancedAPIServer) getFrontend(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	mf, err := a.frontendManager.GetFrontend(frontendID)
 	if err != nil {
 		a.sendError(w, http.StatusNotFound, err.Error())
@@ -153,7 +165,7 @@ func (a *EnhancedAPIServer) getFrontend(w http.ResponseWriter, r *http.Request) 
 		Bindings:      mf.Definition.Bindings,
 		Routing:       mf.Definition.Routing,
 		BackendsCount: len(backends),
-		RoutesCount:   len(mf.Routes),
+		RoutesCount:   mf.RoutesCount(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -244,6 +256,9 @@ func (a *EnhancedAPIServer) registerBackend(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Register backend with the frontend
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if err := a.frontendManager.RegisterBackend(frontendID, backend); err != nil {
 		a.sendBackendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to register backend: %v", err))
 		return
@@ -296,6 +311,9 @@ func (a *EnhancedAPIServer) unregisterBackend(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if err := a.frontendManager.UnregisterBackend(frontendID, backendName); err != nil {
 		a.sendBackendError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to unregister backend: %v", err))
 		return
@@ -346,6 +364,9 @@ func (a *EnhancedAPIServer) addRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add route to frontend
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if err := a.frontendManager.AddRoute(frontendID, route); err != nil {
 		a.sendRouteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to add route: %v", err))
 		return
@@ -403,6 +424,9 @@ func (a *EnhancedAPIServer) deleteRoute(w http.ResponseWriter, r *http.Request) 
 		a.sendRouteError(w, http.StatusBadRequest, "Route ID is required")
 		return
 	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
 	if err := a.frontendManager.DeleteRoute(frontendID, routeID); err != nil {
 		a.sendRouteError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete route: %v", err))

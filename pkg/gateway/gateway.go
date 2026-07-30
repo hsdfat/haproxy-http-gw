@@ -283,10 +283,13 @@ func (g *HTTPGateway) AddBackendRoute(host, path, backendName string) error {
 		return fmt.Errorf("either host or path must be specified")
 	}
 
-	// Start transaction
+	// Start transaction. Disposing it has to be deferred: the success path and
+	// the final-commit error path used to return without disposing at all, which
+	// leaves the client owning a transaction it will never release.
 	if err := g.haproxyClient.APIStartTransaction(); err != nil {
 		return err
 	}
+	defer g.haproxyClient.APIDisposeTransaction()
 
 	// Get existing ACLs from the frontend within the transaction
 	existingACLs, err := g.haproxyClient.ACLsGet("frontend", g.config.FrontendName)
@@ -312,7 +315,6 @@ func (g *HTTPGateway) AddBackendRoute(host, path, backendName string) error {
 
 	// Replace all ACLs (this handles both creating new ones and preserving existing ones)
 	if err := g.haproxyClient.ACLsReplace("frontend", g.config.FrontendName, allACLs); err != nil {
-		g.haproxyClient.APIDisposeTransaction()
 		return fmt.Errorf("failed to update ACLs: %w", err)
 	}
 
@@ -332,7 +334,6 @@ func (g *HTTPGateway) AddBackendRoute(host, path, backendName string) error {
 	}
 
 	if err := g.haproxyClient.BackendSwitchingRuleCreate(nextIndex, g.config.FrontendName, rule); err != nil {
-		g.haproxyClient.APIDisposeTransaction()
 		return fmt.Errorf("failed to create backend switching rule: %w", err)
 	}
 

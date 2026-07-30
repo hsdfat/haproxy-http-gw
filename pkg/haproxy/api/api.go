@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sync"
 
 	clientnative "github.com/haproxytech/client-native/v6"
 	"github.com/haproxytech/client-native/v6/config-parser/types"
@@ -198,6 +199,22 @@ type clientNative struct {
 	backends                            map[string]Backend
 	previousBackends                    []byte
 	configurationHashAtTransactionStart string
+
+	// txMu serializes the entire transaction lifecycle, not just the commit.
+	// activeTransaction, configurationHashAtTransactionStart and the backends map
+	// are shared mutable state, and one client is shared by every frontend
+	// Manager: without this, one goroutine's dispose clears the transaction ID
+	// another goroutine is still committing with, and a commit with an empty ID
+	// deletes the live haproxy.cfg. Acquired by a successful APIStartTransaction,
+	// released by APIDisposeTransaction.
+	txMu sync.Mutex
+
+	// txStateMu guards txOwned, which records whether txMu is currently held for
+	// a started transaction. It keeps APIDisposeTransaction safe to call when no
+	// transaction was started, or a second time for the same one, instead of
+	// panicking on an unlocked mutex or releasing a lock someone else holds.
+	txStateMu sync.Mutex
+	txOwned   bool
 }
 
 func New(transactionDir, configFile, programPath, runtimeSocket string) (client HAProxyClient, err error) { //nolint:ireturn
@@ -238,7 +255,29 @@ func New(transactionDir, configFile, programPath, runtimeSocket string) (client 
 	return &cn, nil
 }
 
+// APIStartTransaction opens a configuration transaction and takes ownership of
+// the client until APIDisposeTransaction releases it. Callers must dispose every
+// transaction they successfully start, conventionally with a defer.
 func (c *clientNative) APIStartTransaction() error {
+	c.txMu.Lock()
+	c.setTxOwned(true)
+
+	if err := c.startTransaction(); err != nil {
+		// A failed start owns nothing: drop any half-set ID so a later stray
+		// commit is caught by the empty-ID guard rather than committing an
+		// orphaned transaction, and release the lock, because callers return the
+		// error without disposing.
+		c.activeTransaction = ""
+		c.setTxOwned(false)
+		c.txMu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// startTransaction does the actual work of APIStartTransaction. It runs with
+// txMu held.
+func (c *clientNative) startTransaction() error {
 	configuration, err := c.nativeAPI.Configuration()
 	if err != nil {
 		return err
@@ -347,9 +386,34 @@ func (c *clientNative) APIFinalCommitTransaction() error {
 	return err
 }
 
+// APIDisposeTransaction ends the transaction opened by APIStartTransaction and
+// releases the client. It is a no-op when there is no transaction of ours to
+// dispose, so a caller that disposes after a failed start, or disposes twice,
+// does not release a lock another goroutine legitimately holds.
 func (c *clientNative) APIDisposeTransaction() {
 	logger.ResetFields()
+
+	if !c.takeTxOwnership() {
+		return
+	}
 	c.activeTransaction = ""
+	c.txMu.Unlock()
+}
+
+func (c *clientNative) setTxOwned(owned bool) {
+	c.txStateMu.Lock()
+	c.txOwned = owned
+	c.txStateMu.Unlock()
+}
+
+// takeTxOwnership clears the ownership flag and reports whether this caller is
+// the one responsible for releasing txMu.
+func (c *clientNative) takeTxOwnership() bool {
+	c.txStateMu.Lock()
+	defer c.txStateMu.Unlock()
+	owned := c.txOwned
+	c.txOwned = false
+	return owned
 }
 
 func (c *clientNative) SetAuxCfgFile(auxCfgFile string) {

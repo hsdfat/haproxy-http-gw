@@ -464,6 +464,14 @@ func (fm *FrontendManager) Stop() error {
 	return nil
 }
 
+// RoutesCount returns how many routes are configured on the frontend. Reading
+// len(mf.Routes) directly races AddRoute, which writes the map under mf.mu.
+func (mf *ManagedFrontend) RoutesCount() int {
+	mf.mu.RLock()
+	defer mf.mu.RUnlock()
+	return len(mf.Routes)
+}
+
 // GetFrontendStats returns statistics for a frontend
 func (mf *ManagedFrontend) GetStats() map[string]interface{} {
 	mf.mu.RLock()
